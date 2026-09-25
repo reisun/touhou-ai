@@ -1,0 +1,11 @@
+FROM python:3.12-slim@sha256:46cb7cc2877e60fbd5e21a9ae6115c30ace7a077b9f8772da879e4590c18c2e3
+WORKDIR /app
+ENV MPLCONFIGDIR=/tmp/matplotlib
+RUN pip install --no-cache-dir torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+COPY requirements-learner.txt requirements-learner.lock.txt ./
+RUN pip install --no-cache-dir -r requirements-learner.txt -c requirements-learner.lock.txt && pip check
+COPY learner_check.py bridge.py ./
+COPY touhou_ai ./touhou_ai
+COPY tests ./tests
+USER 10001:10001
+CMD ["python", "-m", "touhou_ai.runner", "check"]

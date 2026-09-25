@@ -1,0 +1,12 @@
+{
+  "backend": "mock",
+  "reward_profile": "mock_zero_test_only",
+  "seed": 7,
+  "total_timesteps": 64,
+  "n_steps": 32,
+  "batch_size": 16,
+  "n_epochs": 1,
+  "frames_per_step": 8,
+  "checkpoint_frequency": 32,
+  "evaluation_episodes": 2
+}

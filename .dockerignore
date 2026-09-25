@@ -1,0 +1,10 @@
+*
+!bridge.py
+!smoke.py
+!learner_check.py
+!requirements-learner.txt
+!requirements-learner.lock.txt
+!tests/
+!tests/*.py
+!touhou_ai/
+!touhou_ai/*.py

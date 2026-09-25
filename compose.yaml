@@ -1,0 +1,27 @@
+name: touhou-ai
+services:
+  learner: &learner
+    build:
+      context: .
+      dockerfile: Dockerfile.learner
+    profiles: [learning]
+    environment:
+      BRIDGE_URL: http://host.docker.internal:18765
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN:?Run scripts/setup.ps1 first}
+    volumes:
+      - ./artifacts:/artifacts
+      - ./configs:/configs:ro
+  training:
+    <<: *learner
+    command: [python, -m, touhou_ai.runner, train, --config, "/configs/${TRAIN_CONFIG:-mock-smoke.json}", --output, "/artifacts/${RUN_ID:-manual}"]
+    stop_grace_period: 30s
+  test:
+    build: .
+    network_mode: none
+  smoke:
+    build: .
+    profiles: [integration]
+    environment:
+      BRIDGE_URL: http://host.docker.internal:18765
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN:?Run scripts/setup.ps1 first}
+    command: [python, smoke.py]

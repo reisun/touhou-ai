@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('check', 'start', 'status', 'logs', 'stop', 'evaluate', 'report')][string]$Action = 'status',
+    [ValidateSet('check', 'policy-check', 'rehearse', 'live-readiness', 'start', 'status', 'logs', 'stop', 'evaluate', 'report')][string]$Action = 'status',
     [ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_.-]*\.json$')][string]$ConfigFile = 'mock-smoke.json'
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +15,18 @@ function Invoke-Docker {
     if ($LASTEXITCODE -ne 0) { throw "Docker failed with exit code $LASTEXITCODE" }
 }
 switch ($Action) {
+    'live-readiness' {
+        & '.\.venv\Scripts\python.exe' -m touhou_ai.training_readiness
+        if ($LASTEXITCODE -ne 0) { throw 'Readiness inspection failed' }
+    }
+    'rehearse' {
+        $output = '/artifacts/rehearsal-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+        Invoke-Docker compose --profile learning run --build --rm learner python -m touhou_ai.training_rehearsal --output $output
+    }
+    'policy-check' {
+        $output = '/artifacts/policy-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
+        Invoke-Docker compose --profile learning run --build --rm learner python -m touhou_ai.policy_check --output $output
+    }
     'check' { Invoke-Docker compose --profile learning run --build --rm learner }
     'start' {
         $running = & docker compose --profile learning ps --status running -q training

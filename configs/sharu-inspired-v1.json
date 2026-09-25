@@ -1,0 +1,12 @@
+{
+  "profile": "sharu-inspired-v1",
+  "sources": ["https://www.youtube.com/watch?v=t2rOpTryNU4", "https://x.com/SharuStudio"],
+  "source_checked": "2026-09-25",
+  "game": {"difficulty": "Normal", "character": "Reimu", "shot": "B"},
+  "collection": {"game_fps": 60, "decisions_per_second": 30, "frames_per_action": 2, "instances": 1, "realtime": true, "demonstrations": false, "target_update_boundary": "game_over"},
+  "observations": {"bullets": 128, "lasers": 64, "enemies": 24, "items": 40, "far_grid_cell_pixels": 4},
+  "local_encoding": {"width": 384, "height": 448, "velocity_scale": 600, "acceleration_scale": 1200, "cpa_horizon_seconds": 2, "elapsed_scale_seconds": 10, "lives_scale": 8, "power_scale": 5},
+  "provisional_reward_weights": {"damage": 1.0, "kill": 0.5, "stage_clear": 20.0, "remaining_life": 5.0, "hit": -5.0, "bomb": -0.5},
+  "provisional_ppo": {"seed": 7, "learning_rate": 0.0003, "gamma": 0.99, "gae_lambda": 0.95, "clip_range": 0.2, "ent_coef": 0.01, "n_steps": 2048, "batch_size": 64, "n_epochs": 10},
+  "live_training_enabled": false
+}

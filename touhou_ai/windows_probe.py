@@ -26,6 +26,7 @@ def pe_image_base(data):
 
 
 class ReadOnlyProcess:
+    max_read_size = 262144
     def __init__(self, pid, expected_path):
         if os.name != "nt":
             raise OSError("Windows is required")
@@ -55,7 +56,7 @@ class ReadOnlyProcess:
             raise
 
     def read(self, address, size):
-        if not 0 < size <= 16384:
+        if not 0 < size <= self.max_read_size:
             raise ValueError("read size outside probe bounds")
         buffer = ctypes.create_string_buffer(size)
         received = ctypes.c_size_t()

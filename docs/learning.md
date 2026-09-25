@@ -4,8 +4,9 @@
 
 The runner currently accepts only backend=mock and reward_profile=mock_zero_test_only.
 Rewards are always zero: metrics demonstrate plumbing, not learned game skill.
-The user decides the future gameplay reward, observation, action space, and
-experiment budgets before real-game learning is enabled.
+The source-based initial gameplay observation/action/reward design is implemented
+separately; see [the Sharu-inspired profile](sharu-learning-profile.md).
+Live collection and experiment budgets are still required before game learning.
 
 The host GPU is AMD Radeon RX 5700 XT. This milestone uses CPU PyTorch only;
 no GPU runtime or driver changes were made. Windows runs a standard-library

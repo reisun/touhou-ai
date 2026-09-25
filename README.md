@@ -8,6 +8,17 @@ The mock bridge neither reads game memory nor sends keyboard input. A separate
 Windows probe checks read-only game memory access. Real-game learning is not
 enabled; only small, zero-reward diagnostic PPO runs are configured.
 
+The [Sharu-inspired learning profile](docs/sharu-learning-profile.md) implements
+the initial numerical observation/action contract, sparse event rewards, and
+an untrained PPO policy. Run `./scripts/learning.ps1 policy-check` for its offline
+diagnostic. This profile is not yet connected to the live game.
+
+A [native TH10 diagnostic adapter](docs/live-adapter.md) now supports bounded
+raw-state extraction, game-local input, frame-gated stepping and cold automatic
+restart into Normal/Reimu B. `./scripts/live.ps1 verify -Steps 900 -Episodes 2`
+tests two bounded runs and stops the game. Full PPO observations/rewards are
+still gated pending entity identity, HP/event and geometry validation.
+
 ## Windows
 
 Use PowerShell 7 and Python 3.11+:
@@ -46,7 +57,9 @@ An authentication token prevents casual local access; this is not a public API.
 ## Scope
 
 See `docs/architecture.md` for the protocol and remaining real-game work.
-The user decides reward design, experiment conditions, and long training runs.
+Initial gameplay settings follow the user's Sharu references; unpublished
+coefficients are explicitly provisional. Long live training still needs a budget
+and completion of the real-game integration gates.
 The learner image includes CPU PyTorch, Gymnasium, and Stable-Baselines3 PPO.
 Its default check validates the mock bridge's Gymnasium contract and needs the
 Windows mock bridge running. `verify.ps1` manages that bridge, runs all tests,

@@ -1,0 +1,10 @@
+const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
+const ctx=vm.createContext({});vm.runInContext(fs.readFileSync('dashboard/obs-status.js','utf8'),ctx);
+const status=ctx.learningBannerState;
+assert.equal(status({learning:{phase:'playing',updates:233}},null,true).text,'プレイ中（学習 233 回目の後）');
+assert.equal(status(null,{growth:[]},false).text,'待機中（学習 0 回目の後）');
+assert.equal(status({learning:{phase:'playing',updates:233}},{growth:[]},false).playing,false);
+assert.equal(status({learning:{phase:'playing',updates:233}},{growth:[]},false).text,'待機中（学習 0 回目の後）');
+assert.equal(status({learning:{phase:'optimizing_at_game_over',updates:2}},null,true).text,'学習更新中（学習 2 回目の後）');
+assert.equal(status(null,{growth:[{total_updates:7},{total_updates:3}]},false).text,'待機中（学習 7 回目の後）');
+console.log('OBS learning banner: live, optimizing, stale, reset and saved counts passed');

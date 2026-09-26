@@ -79,6 +79,7 @@ class Th10Reader:
                           "position": self.floats(data, offset+position_offset, 2),
                           "velocity_raw": self.floats(data, offset+velocity_offset, 2)}
                 if kind == "bullets":
+                    entity["flags_raw"] = struct.unpack_from("<I", data, offset)[0]
                     entity["age_frames"] = struct.unpack_from("<i", data, offset+0x3fc)[0]
                     entity["hitbox_raw"] = self.floats(data, offset+0x3f0, 2)
                     entity["type"] = struct.unpack_from("<i", data, offset+0x460)[0]

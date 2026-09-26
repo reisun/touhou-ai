@@ -1,13 +1,16 @@
 param(
     [ValidateSet('rehearse', 'status', 'stop')][string]$Action = 'status',
     [ValidateRange(1, 5)][int]$Episodes = 3,
-    [ValidateRange(32, 2400)][int]$MaxSteps = 1800,
+    [ValidateRange(32, 18000)][int]$MaxSteps = 1800,
     [ValidateRange(30, 900)][int]$MaxSeconds = 600,
     [switch]$ResumeLatest,
     [switch]$ContinueManaged,
     [switch]$ResumePaused,
     [switch]$Extended,
+    [switch]$DualGrid,
+    [switch]$DirectML,
     [switch]$NoUI,
+    [switch]$Continuous,
     [string]$ResumeCheckpoint
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +18,46 @@ $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $recordPath = Join-Path $root '.runtime/live-learning.json'
 if ($Action -eq 'rehearse') {
+    # Validate all resume contracts before replacing the active-run record or
+    # stopping its observer. Python also checks hash, weights and schedule below.
+    if ($ResumeLatest -or $ResumeCheckpoint) {
+        $resumeStatusPath = $null
+        if ($ResumeCheckpoint) {
+            $resumeStatusPath = Join-Path (Split-Path $ResumeCheckpoint -Parent) 'status.json'
+        } elseif (Test-Path -LiteralPath $recordPath) {
+            $resumeRecord = Get-Content -LiteralPath $recordPath | ConvertFrom-Json
+            if ($resumeRecord.RunId -notmatch '^live-learning-[0-9]{8}-[0-9]{6}-[a-f0-9]{6}$') { throw 'Invalid managed run' }
+            $resumeStatusPath = Join-Path $root "artifacts/$($resumeRecord.RunId)/status.json"
+        }
+        if ($resumeStatusPath) {
+            $resumeStatus = Get-Content -LiteralPath $resumeStatusPath | ConvertFrom-Json
+            $expectedContract = if ($DualGrid) { 'th10-dual-grid-v2' } elseif ($Extended) { 'th10-focused-bullets-v2' } else { 'th10-live-observed-v1' }
+            if ($resumeStatus.contract -ne $expectedContract -or $resumeStatus.reward_version -ne 'th10-rewards-v11') {
+                throw 'Checkpoint uses an old observation/reward contract; start a new campaign explicitly. Existing run record was preserved.'
+            }
+            if ($resumeStatus.configured_ppo.gamma -ne 0.9995 -or $resumeStatus.discount_contract.version -ne 'th10-discount-2f-v1') {
+                throw 'Checkpoint uses an old discount contract; start a new campaign explicitly. Existing run record was preserved.'
+            }
+        }
+    }
+    # Reject incompatible dual-grid resumes before changing the active run record,
+    # stopping its observer, or opening UI. Never migrate focused weights silently.
+    if ($DualGrid -and ($ResumeLatest -or $ResumeCheckpoint)) {
+        $candidateStatus = $null
+        if ($ResumeCheckpoint) {
+            $candidateStatus = Join-Path (Split-Path $ResumeCheckpoint -Parent) 'status.json'
+        } elseif (Test-Path -LiteralPath $recordPath) {
+            $previousRun = Get-Content -LiteralPath $recordPath | ConvertFrom-Json
+            if ($previousRun.RunId -notmatch '^live-learning-[0-9]{8}-[0-9]{6}-[a-f0-9]{6}$') { throw 'Invalid managed run' }
+            $candidateStatus = Join-Path $root "artifacts/$($previousRun.RunId)/status.json"
+        }
+        if ($candidateStatus) {
+            $candidate = Get-Content -LiteralPath $candidateStatus | ConvertFrom-Json
+            if ($candidate.contract -ne 'th10-dual-grid-v2') {
+                throw 'Dual-grid requires a fresh campaign or a dual-grid checkpoint; existing model was not changed.'
+            }
+        }
+    }
     $mutex = [System.Threading.Mutex]::new($false, 'Local\TouhouAI.Learning')
     $acquired = $false
     try {
@@ -36,7 +79,10 @@ if ($Action -eq 'rehearse') {
             if ($ResumeLatest) { throw 'Choose ResumeLatest or ResumeCheckpoint, not both' }
             $resumeArgs = @('--resume', $ResumeCheckpoint)
         }
-        if ($ResumeLatest) {
+        if ($ResumeLatest -and -not (Test-Path -LiteralPath $recordPath)) {
+            Write-Output 'No active learning campaign; starting a new model.'
+        }
+        if ($ResumeLatest -and (Test-Path -LiteralPath $recordPath)) {
             $prior = Get-Content -LiteralPath $recordPath | ConvertFrom-Json
             if ($prior.RunId -notmatch '^live-learning-[0-9]{8}-[0-9]{6}-[a-f0-9]{6}$') { throw 'Invalid managed run' }
             $priorOutput = Join-Path $root "artifacts/$($prior.RunId)"
@@ -54,7 +100,10 @@ if ($Action -eq 'rehearse') {
         $gameArgs = @()
         if ($ContinueManaged) { $gameArgs = @('--continue-managed') }
         if ($Extended) { $gameArgs += '--extended' }
+        if ($DualGrid) { $gameArgs += '--dual-grid' }
+        if ($DirectML) { $gameArgs += '--directml' }
         if ($ResumePaused) { $gameArgs += '--resume-paused' }
+        if ($Continuous) { $gameArgs += '--continuous' }
         & './.venv/Scripts/python.exe' -m touhou_ai.live_learning --output $output --episodes $Episodes --max-steps $MaxSteps --max-seconds $MaxSeconds @resumeArgs @gameArgs
         if ($LASTEXITCODE -ne 0) { throw "Real rehearsal failed; see $output/status.json" }
         Write-Output "Real rehearsal completed: $output"

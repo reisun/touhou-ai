@@ -7,6 +7,7 @@
   "observations": {"bullets": 128, "lasers": 64, "enemies": 24, "items": 40, "far_grid_cell_pixels": 4},
   "local_encoding": {"width": 384, "height": 448, "velocity_scale": 600, "acceleration_scale": 1200, "cpa_horizon_seconds": 2, "elapsed_scale_seconds": 10, "lives_scale": 8, "power_scale": 5},
   "provisional_reward_weights": {"damage": 1.0, "kill": 0.5, "stage_clear": 20.0, "remaining_life": 5.0, "hit": -5.0, "bomb": -0.5},
-  "provisional_ppo": {"seed": 7, "learning_rate": 0.0003, "gamma": 0.99, "gae_lambda": 0.95, "clip_range": 0.2, "ent_coef": 0.01, "n_steps": 2048, "batch_size": 64, "n_epochs": 10},
-  "live_training_enabled": false
+  "provisional_ppo": {"seed": 7, "learning_rate": 0.0003, "gamma": 0.9995, "gae_lambda": 0.95, "clip_range": 0.2, "ent_coef": 0.01, "n_steps": 2048, "batch_size": 64, "n_epochs": 10},
+  "live_training_enabled": false,
+  "live_contract": {"reward_version": "th10-rewards-v11", "bomb_schedule_version": 1, "bomb_decision_frames": 12, "bomb_press_frames": 2, "reward_components": ["damage", "progress", "hit", "power_down"], "progress_detection": "verified_engine_pinned_ecl"}
 }

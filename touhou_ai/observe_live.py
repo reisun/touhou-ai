@@ -14,8 +14,11 @@ from touhou_ai.telemetry import packet
 def observe(pid, seconds, output, model_monitor=False):
     monitor = None
     if model_monitor:
-        from touhou_ai.model_monitor import ModelMonitor
-        monitor = ModelMonitor()
+        from touhou_ai.model_monitor import ModelMonitor, NoCompatibleCheckpoint
+        try:
+            monitor = ModelMonitor()
+        except NoCompatibleCheckpoint:
+            print('No compatible checkpoint; observing real game without policy predictions.', flush=True)
     config = verify_game(pid)
     lease = ProcessLease(pid)
     process = ReadOnlyProcess(pid, config['executable'])
@@ -56,6 +59,8 @@ def observe(pid, seconds, output, model_monitor=False):
                     data = packet(state, output.name, 'live')
                     if monitor is not None:
                         monitor.attach(state, data)
+                    elif model_monitor:
+                        data['policy_unavailable'] = 'no_compatible_checkpoint'
                     data['observer'] = {'mode': 'passive_read_only', 'samples': count+1,
                         'dropped_racing_frames': dropped, 'target_hz': 30,
                         'mean_hz': count/max(time.monotonic()-started, 0.001)}

@@ -1,6 +1,7 @@
 """Versioned observer interface; unknown measurements are null, never invented."""
 import math
 import time
+from touhou_ai.bullet_scope import display_observation
 
 
 def finite(value):
@@ -24,6 +25,7 @@ def packet(raw, episode, source="recording", timestamp=None):
         entities[kind] = None if values is None else [
             {"position": point(entity), "velocity_raw": entity.get("velocity_raw"),
              "hitbox_raw": entity.get("hitbox_raw"), "type": entity.get("type"),
+             "flags_raw": entity.get("flags_raw"),
              "hp": entity.get("hp"), "hp_max": entity.get("hp_max"),
              "is_boss": entity.get("is_boss"), "acceleration": entity.get("acceleration"),
              "age_frames": entity.get("age_frames"), "collision": entity.get("collision"),
@@ -33,6 +35,7 @@ def packet(raw, episode, source="recording", timestamp=None):
     distances = [math.dist(position, b["position"]) for b in entities["bullets"] or []] if position else []
     frame = raw.get("stage_frame")
     return {"schema_version": 1, "episode_id": episode, "source": source,
+            "ai_observation": display_observation(raw, entities),
             "timestamp": (time.time() if source == "live" else None) if timestamp is None else timestamp,
             "sequence": raw.get("gate_tick"), "game_frame": frame,
             "game": {"stage": raw.get("stage"), "difficulty": raw.get("difficulty"),
@@ -55,7 +58,7 @@ def packet(raw, episode, source="recording", timestamp=None):
                              "boss_phase": raw.get('spell') is not None,
                              "acceleration": any(e.get('acceleration') is not None for e in raw.get('bullets') or []),
                              "laser_geometry_available": any(e.get('collision') is not None for e in raw.get('lasers') or []),
-                             "reward_events": False, "policy_connected": False,
+                             "reward_events": raw.get('reward_events_verified') is True, "policy_connected": False,
                              "live_training": False,
                              "laser_geometry_validated": bool(raw.get('lasers')) and all(
                                  (e.get('collision') or {}).get('field_validated') is True

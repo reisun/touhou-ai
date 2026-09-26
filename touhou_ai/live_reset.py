@@ -56,10 +56,19 @@ def verify_game_over(state, ready=False):
 
 def wait_game_over(runtime, budget=600):
     state = runtime.snapshot(full=False)
+    verify_game_over(state)
+    # Flush held/pressed/repeat state before interpreting or confirming any menu.
+    state = runtime.step(0, 2, full=False)
     dismissed = False
+    phases = []
     for _ in range(budget):
         verify_game_over(state)
         words = state.get("pause_words")
+        phase = None if words is None else words[1]
+        if not phases or phases[-1] != phase:
+            phases.append(phase)
+        if phase == 12:
+            raise RuntimeError(f'unexpected name-entry screen; phases={phases}; words={words}')
         if words is not None and words[0:2] == [2, 8]:
             verify_game_over(state, ready=True)
             return state
@@ -69,7 +78,7 @@ def wait_game_over(runtime, budget=600):
             runtime.step(1, 1, full=False)
             dismissed = True
         state = runtime.step(0, 1, full=False)
-    raise TimeoutError("game-over menu did not become ready")
+    raise TimeoutError(f"game-over menu did not become ready; phases={phases}; words={words}")
 
 
 def continue_episode(runtime, budget=180):

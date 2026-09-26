@@ -59,7 +59,7 @@ class ExtendedFeatureTests(unittest.TestCase):
                'player': {'position': [0, 400], 'velocity_raw': [0, 0], 'status': 1,
                           'invincibility_raw': 0, 'focus_raw': 0},
                'bomb': {'state': 0}, 'spell': {'flags_raw': 1, 'id_raw': 3},
-               'bullets': [{'position': [10, 100], 'velocity_raw': [1, 2], 'acceleration': [.25, -.5]}],
+               'bullets': [{'position': [10, 300], 'velocity_raw': [1, 2], 'acceleration': [.25, -.5]}],
                'enemies': [{'position': [0, 80], 'velocity_raw': [0, 0], 'hp': 2000, 'hp_max': 8000, 'is_boss': True}],
                'items': [], 'lasers': []}
         observation = new_env.encode(raw)

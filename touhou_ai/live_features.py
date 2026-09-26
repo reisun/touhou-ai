@@ -1,5 +1,6 @@
 """Extended measured interface. Missing values have explicit availability channels."""
 import math
+from touhou_ai.bullet_scope import SPEC
 
 EXTENDED_CONTRACT = 'th10-live-observed-v2'
 
@@ -30,14 +31,14 @@ def bomb_events(before, after):
     if old['state'] not in (0, 1) or new['state'] not in (0, 1):
         raise ValueError('unknown bomb state')
     if old['state'] == 0 and new['state'] == 1:
-        return [{'id': f"bomb-start:{after['stage_frame']}", 'kind': 'bomb', 'confirmed': True}]
+        return [{'id': f"bomb-start:{after.get('stage', 0)}:{after['stage_frame']}", 'kind': 'bomb', 'confirmed': True}]
     return []
 
 
 def extended_space(base):
     import gymnasium as gym
     import numpy as np
-    shapes = {'player': (21,), 'bullets': (128, 8), 'enemies': (24, 9), 'lasers': (64, 12)}
+    shapes = {'player': (21,), 'bullets': (SPEC['individual_bullets'], 8), 'enemies': (24, 9), 'lasers': (64, 12)}
     return gym.spaces.Dict({key: gym.spaces.Box(-1, 1, shapes[key], dtype=np.float32)
                            if key in shapes else space for key, space in base.spaces.items()})
 
@@ -45,7 +46,7 @@ def extended_space(base):
 def encode_extended(raw, base_observation):
     import numpy as np
     out = {key: np.zeros(shape, dtype=np.float32) for key, shape in
-           {'player': (21,), 'bullets': (128, 8), 'enemies': (24, 9), 'lasers': (64, 12)}.items()}
+           {'player': (21,), 'bullets': (SPEC['individual_bullets'], 8), 'enemies': (24, 9), 'lasers': (64, 12)}.items()}
     for key in base_observation:
         if key not in out:
             out[key] = base_observation[key]

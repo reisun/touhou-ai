@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlparse
 
 from touhou_ai.report import summarize
 from touhou_ai.telemetry import packet
+from touhou_ai.obs_stats import ObsStats
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,6 +20,7 @@ class Recordings:
         self.root = root.resolve()
         self.lock = threading.Lock()
         self.cache = {}
+        self.obs = ObsStats(self.root)
 
     def paths(self):
         return {p.stem: p for p in self.root.glob("live/*.jsonl")
@@ -119,6 +121,8 @@ class Handler(BaseHTTPRequestHandler):
                     return
             if url.path == "/api/health":
                 return self.respond({"service": "touhou-observer", "schema_version": 1, "read_only": True})
+            if url.path == '/api/obs':
+                return self.respond(self.store.obs.snapshot())
             if url.path == "/api/catalog":
                 return self.respond({"recordings": self.store.catalog(), "training_runs": summarize(self.store.root)})
             if url.path == "/api/profile":
@@ -148,12 +152,17 @@ class Handler(BaseHTTPRequestHandler):
                 paths = sorted(self.store.root.glob("policy-*/policy-telemetry.json"), reverse=True)
                 return self.respond(json.loads(paths[0].read_text()) if paths else {"available": False})
             static = {"/": ("index.html", "text/html; charset=utf-8"),
+                      "/obs.js": ("obs.js", "text/javascript; charset=utf-8"),
+                      "/obs-status.js": ("obs-status.js", "text/javascript; charset=utf-8"),
+                      "/obs.css": ("obs.css", "text/css; charset=utf-8"),
                       "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                       "/app.css": ("app.css", "text/css; charset=utf-8"),
                       "/icons.js": ("icons.js", "text/javascript; charset=utf-8")}
             if url.path not in static:
                 return self.respond({"error": "not found"}, 404)
             filename, mime = static[url.path]
+            if url.path == '/' and query.get('mode', [''])[0] in ('obs1', 'obs2'):
+                filename = 'obs.html'
             return self.respond((self.root / "dashboard" / filename).read_bytes(), content_type=mime)
         except KeyError:
             self.respond({"error": "recording not found"}, 404)

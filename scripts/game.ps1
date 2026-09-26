@@ -2,7 +2,8 @@ param(
     [ValidateSet('inspect', 'start', 'stop', 'status')][string]$Action = 'inspect',
     [ValidateRange(5, 120)][int]$StartupTimeoutSeconds = 60,
     [ValidateSet('Steam', 'Direct')][string]$LaunchMode = 'Steam',
-    [switch]$RunAsInvoker
+    [switch]$RunAsInvoker,
+    [switch]$RecoveryStop
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
@@ -90,8 +91,14 @@ switch ($Action) {
             if ([TouhouProcessInfo]::IsElevated($process.Id) -and -not [TouhouProcessInfo]::IsElevated($PID)) {
                 throw 'Game is elevated but this controller is not. Close the game manually and launch with a verified non-elevated route.'
             }
-            if (-not $process.CloseMainWindow()) { throw 'No closable game window; close it manually' }
-            if (-not $process.WaitForExit(10000)) { throw 'Game has not exited; no forced termination performed' }
+            $requested = $process.CloseMainWindow()
+            if (-not $requested -and -not $RecoveryStop) { throw 'No closable game window; close it manually' }
+            if (-not $process.WaitForExit(10000)) {
+                if (-not $RecoveryStop) { throw 'Game has not exited; no forced termination performed' }
+                # Kill through the verified process handle, never a name or a fresh PID lookup.
+                $process.Kill()
+                if (-not $process.WaitForExit(10000)) { throw 'Managed game did not exit during recovery' }
+            }
         }
         $remaining = @(Get-Process -Name 'th10' -ErrorAction SilentlyContinue)
         if ($remaining.Count -gt 0) { throw 'A different game process remains, possibly after UAC/Steam handoff. Close it from its window; automatic shutdown is not verified.' }

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import queue
 import time
+import hashlib
 
 from touhou_ai.telemetry import packet
 
@@ -22,9 +23,12 @@ def input_mask(action):
 
 
 class LiveRuntime:
-    def __init__(self, pid):
+    def __init__(self, pid, diagnostic_script=None):
         import frida
         config = verify_game(pid)
+        data_path = Path(config['executable']).with_name('th10.dat')
+        if hashlib.sha256(data_path.read_bytes()).hexdigest() != '1fb1d0ffe34115f563f5feb43755c0feee2315b0ac2b32e2f9e84c81e9433bea':
+            raise ValueError('unverified game data for progress rewards')
         self.process = ReadOnlyProcess(pid, config["executable"])
         self.session = self.script = None
         self.lease = None
@@ -34,7 +38,11 @@ class LiveRuntime:
             from touhou_ai.process_lease import ProcessLease
             self.lease = ProcessLease(pid)
             self.session = frida.attach(pid)
-            self.script = self.session.create_script(Path(__file__).with_name("th10_gate.js").read_text())
+            source = Path(__file__).with_name("th10_gate.js").read_text()
+            source += '\n' + Path(__file__).with_name('progress_events.js').read_text(encoding='utf-8')
+            if diagnostic_script is not None:
+                source += '\n' + Path(diagnostic_script).read_text(encoding='utf-8')
+            self.script = self.session.create_script(source)
             self.script.on("message", self._message)
             self.script.load()
             self.api = self.script.exports_sync
@@ -65,18 +73,27 @@ class LiveRuntime:
         if not status["enabled"] or not status["parked"] or status["tick"] != self.park["tick"]:
             raise RuntimeError("game not held at expected frame")
         result = self.reader.snapshot(full)
+        combat = self.api.combat()
+        if combat['error']:
+            raise RuntimeError('combat observation failed: ' + combat['error'])
+        result['combat_reward_events'] = combat['events']
+        progress = self.api.progress()
+        if progress['error']:
+            raise RuntimeError('progress observation failed: ' + progress['error'])
+        result['progress_reward_events'] = progress['events']
+        result['reward_events_verified'] = True
         after = self.api.status()
         if not after["parked"] or not after["enabled"] or after["tick"] != status["tick"]:
             raise RuntimeError("snapshot lease lost")
         return result | {"gate_tick": status["tick"], "frame_locked": True,
                          "input_calls": after["input_calls"]}
 
-    def step(self, mask=0, frames=2, full=True):
+    def step(self, mask=0, frames=2, full=True, gameplay_guard=False):
         if (type(mask) is not int or mask < 0 or mask & ~0xff
                 or type(frames) is not int or not 1 <= frames <= 120):
             raise ValueError("invalid frame action")
         start = self.park["tick"]
-        self.api.step(start, frames, mask)
+        self.api.step(start, frames, mask, gameplay_guard)
         self.park = self._wait()
         if self.park["tick"] != start+frames:
             raise RuntimeError("frame gate skipped updates")
@@ -86,7 +103,7 @@ class LiveRuntime:
         before = self.snapshot(full=False)
         if before["replay_mode"] != 0 or before["mode_flags"] != 0 or before["player"] is None:
             raise RuntimeError("not normal live gameplay")
-        state = self.step(mask, frames, full)
+        state = self.step(mask, frames, full, gameplay_guard=True)
         if (state["stage"] != before["stage"] or state["player"] is None
                 or state["lives_raw"] < 0):
             state["transition"] = "terminal_or_stage_change"

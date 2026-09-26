@@ -37,6 +37,7 @@ class ReaderTests(unittest.TestCase):
         memory.put_pointer(0x4776f0, 0x1000000)
         pool = bytearray(0x7f0*2001)
         struct.pack_into("<h", pool, 0x446, 1)
+        struct.pack_into("<I", pool, 0, 6)
         struct.pack_into("<ff", pool, 0x3b4, -100, 150)
         struct.pack_into("<ff", pool, 0x3c0, 2, 3)
         struct.pack_into("<h", pool, 2000*0x7f0+0x446, 5)
@@ -44,6 +45,7 @@ class ReaderTests(unittest.TestCase):
         state = Th10Reader(memory).snapshot()
         self.assertEqual(len(state["bullets"]), 1)
         self.assertEqual(state["bullets"][0]["position"], [-100, 150])
+        self.assertEqual(state["bullets"][0]["flags_raw"], 6)
         self.assertNotIn("id", state["bullets"][0])
 
     def test_cycle_and_bad_float_fail_closed(self):
@@ -94,7 +96,7 @@ class ResetTests(unittest.TestCase):
                 return self.current
         runtime = Fake()
         self.assertEqual(continue_episode(runtime), gameplay())
-        self.assertEqual(runtime.commands, [0x10, 0, 0x10, 0, 1, 0])
+        self.assertEqual(runtime.commands, [0, 0x10, 0, 0x10, 0, 1, 0])
 
     def test_game_over_rejects_active_game_wrong_mode_and_menu(self):
         for state in (gameplay(), self.game_over() | {"mode_flags": 1},
@@ -124,7 +126,7 @@ class ResetTests(unittest.TestCase):
                 return self.current
         runtime = Fake()
         self.assertEqual(wait_game_over(runtime), ready)
-        self.assertEqual(runtime.commands, [1, 0])
+        self.assertEqual(runtime.commands, [0, 1, 0])
 
     def test_optimizer_hold_sends_only_neutral_and_detects_game_advance(self):
         import threading
@@ -193,7 +195,7 @@ class FrameTests(unittest.TestCase):
         from touhou_ai.live_runtime import LiveRuntime
         class Fake:
             snapshot = lambda self, full=False: gameplay()
-            step = lambda self, mask, frames, full: gameplay() | {"stage_frame": 5}
+            step = lambda self, mask, frames, full, **kwargs: gameplay() | {"stage_frame": 5}
         with self.assertRaisesRegex(RuntimeError, "frame mismatch"):
             LiveRuntime.step_gameplay(Fake())
 
@@ -201,7 +203,10 @@ class FrameTests(unittest.TestCase):
         from touhou_ai.live_runtime import LiveRuntime
         class Fake:
             snapshot = lambda self, full=False: gameplay()
-            step = lambda self, mask, frames, full: gameplay() | {"stage_frame": 4}
+            def step(self, mask, frames, full, gameplay_guard=False):
+                if not gameplay_guard:
+                    raise AssertionError('policy steps require terminal input guard')
+                return gameplay() | {"stage_frame": 4}
         self.assertEqual(LiveRuntime.step_gameplay(Fake())["transition"], "gameplay")
-        Fake.step = lambda self, mask, frames, full: gameplay() | {"lives_raw": -1}
+        Fake.step = lambda self, mask, frames, full, **kwargs: gameplay() | {"lives_raw": -1}
         self.assertEqual(LiveRuntime.step_gameplay(Fake())["transition"], "terminal_or_stage_change")

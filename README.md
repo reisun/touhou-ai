@@ -1,5 +1,10 @@
 # Touhou AI
 
+モデル・報酬・学習運用の変更は[改善履歴](docs/model-learning-history.md)から時系列で参照できます。
+2026-09-26時点では、実機dual-grid観測・報酬v9・CPU推論・DirectML更新まで採用済みです。
+2026-09-27: [報酬v10・ボム12F判断](docs/rewards-v10.md)を実装・限定検証。進行度の実機検出は未完成で無効、学習は停止中です。
+以下のモック／Dockerの説明は初期基盤の記録です。実機学習の採用状況は上記履歴を参照してください。
+
 Current setup and verified boundaries: [environment status](docs/environment-status.md).
 
 Environment foundation for a Windows Touhou 10 bridge and WSL/Docker learner.

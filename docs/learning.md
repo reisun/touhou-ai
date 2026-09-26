@@ -1,5 +1,8 @@
 # Learning and evaluation operations
 
+> Historical scope: this document describes the initial mock/Docker milestone.
+> For subsequent real-game learning and GPU adoption, see the [model/learning history](model-learning-history.md).
+
 ## Implemented boundary
 
 The runner currently accepts only backend=mock and reward_profile=mock_zero_test_only.

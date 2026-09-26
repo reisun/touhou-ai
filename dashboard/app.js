@@ -6,7 +6,7 @@ const names = {bullets:'弾',enemies:'敵',items:'アイテム',lasers:'レー�
 const visible = {bullets:true,enemies:true,items:true,lasers:true};
 const directions = ['circle','arrow-up','arrow-up-right','arrow-right','arrow-down-right','arrow-down','arrow-down-left','arrow-left','arrow-up-left'];
 const order = [8,1,2,7,0,3,6,5,4];
-const rewardNames = {damage:'敵ダメージ',kill:'敵撃破',stage_clear:'面クリア',remaining_life:'残機ボーナス',hit:'被弾',bomb:'ボム'};
+const rewardNames = {damage:'ショットダメージ / 1000 HP',damage_power:'ダメージPower係数',progress:'進行度基本点',progress_life:'進行度の残機係数',progress_power:'進行度のPower係数',hit:'被弾',power_down:'Power減少（現在不使用）'};
 function icons(){lucide.createIcons();}
 function text(id,value){$(id).textContent=value;}
 function value(n,digits=0){return Number.isFinite(n)?n.toFixed(digits):'—';}
@@ -57,7 +57,7 @@ coverage[2].textContent=frame?.capabilities.acceleration?'差分加速度接続 
 coverage[3].textContent=frame?.capabilities.laser_geometry_validated?'直線判定は実測照合済み / 発生・消失は未検証':frame?.capabilities.laser_geometry_available?'解析判定を接続 / 今回の実測範囲外':'現在レーザーなし';
 if(!learning)text('recordHint',policy?.source==='real_observation_shadow'?'実モデル推論 / 操作・学習なし':'観測のみ / AI制御なし');
 renderActualModel(frame);
-if(learning)text('recordHint',({'playing':'実機プレイ中','optimizing_at_game_over':'ゲームオーバー画面で学習更新中','game_over_ready':'学習更新完了 / 継続待機'})[learning.phase]||'実機学習 / 限定プロファイル');
+if(learning)text('recordHint',({'playing':'実機プレイ中','stage_transition':'会話・面移行中 / 学習更新なし','optimizing_at_game_over':'ゲームオーバー画面で学習更新中','game_over_ready':'学習更新完了 / 継続待機'})[learning.phase]||'実機学習 / 限定プロファイル');
 }
 const renderObservation=render;render=function(frame){renderObservation(frame);renderLearning(frame);};
 const measurements=cell(document.querySelector('.policy-section'),'section','','observed-measurements');

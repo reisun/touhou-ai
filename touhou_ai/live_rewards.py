@@ -1,16 +1,23 @@
 """Versioned real-game rewards; event-time evidence only, never inferred kills."""
 import math
 from touhou_ai.progress_schema import MILESTONES, progress_point
-VERSION = 'th10-rewards-v19'
+VERSION = 'th10-rewards-v20'
 # v17 scale retained, except the explicitly increased progress Power coefficient.
-WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': -.1}
+WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': -.1, 'power_gain': .1}
 
 def validate_power_upgrade(manifest):
     if (manifest.get('reward_version') != 'th10-rewards-v17'
-            or manifest.get('reward_weights') != {k: v for k, v in WEIGHTS.items() if k != 'jitter'} | {'progress_power': 2./60}
+            or manifest.get('reward_weights') != {k: v for k, v in WEIGHTS.items() if k not in ('jitter', 'power_gain')} | {'progress_power': 2./60}
             or manifest.get('evasion_only')):
         raise ValueError('Power upgrade requires exactly the full v17 reward contract')
-ENABLED = ['damage', 'progress', 'hit', 'jitter']
+def validate_power_gain_upgrade(manifest):
+    if (manifest.get('reward_version') != 'th10-rewards-v19'
+            or manifest.get('reward_weights') != {k: v for k, v in WEIGHTS.items() if k != 'power_gain'}
+            or manifest.get('evasion_only')):
+        raise ValueError('Power gain addition requires exactly the full v19 reward contract')
+
+
+ENABLED = ['damage', 'progress', 'hit', 'jitter', 'power_gain']
 # Engine paths: live stage-1 acceptance; stage 1..6 mappings: pinned ECL review.
 VERIFIED_PROGRESS_SOURCES = frozenset({'verified_ecl_progress_v1', 'verified_ecl_progress_v2'})
 
@@ -72,6 +79,16 @@ class LiveRewards:
                         reward = self.weights['progress'] + self.weights['progress_life'] * lives + self.weights['progress_power'] * power
                     # Suppressed milestones are consumed too; no delayed bonus.
                     milestones.add(key)
+            elif kind == 'power_gain':
+                from touhou_ai.power_items import POWER_RAW_BY_TYPE
+                before, after, amount = (e.get(k) for k in ('before_raw', 'after_raw', 'amount_raw'))
+                nominal = POWER_RAW_BY_TYPE.get(e.get('item_type'))
+                if (e.get('source') != 'verified_power_pickup_v1' or nominal is None
+                        or not all(type(v) is int for v in (before, after, amount))
+                        or not 0 <= before < after <= 100
+                        or amount != after-before or amount != min(nominal, 100-before)):
+                    raise ValueError('invalid verified Power gain')
+                reward = self.weights['power_gain'] * amount / 20
             elif kind == 'jitter':
                 if e.get('source') != 'actual_displacement_12f_v1':
                     raise ValueError('unverified jitter source')
@@ -91,6 +108,9 @@ def observed_events(before, after, action=None):
     from touhou_ai.live_learning import hit_events
     events = hit_events(before, after, allow_stage_transition=True)
     for e in after.get('combat_reward_events', []):
+        if e.get('kind') == 'power_gain' and e.get('source') == 'verified_power_pickup_v1':
+            events.append(e)
+            continue
         if e.get('source') != 'verified_game_event' or e.get('kind') not in ('damage', 'kill'):
             raise ValueError('unverified combat reward source')
         # Retain kills in raw combat logs, not in the abolished reward component.

@@ -50,6 +50,7 @@ class TimedBombTests(unittest.TestCase):
         from touhou_ai import live_learning as learner
         from tests.test_dual_grid import state as make_state
         from tests.test_live_rewards import damage
+        from tests.test_power_gain_rewards import pickup
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root/'configs').mkdir(); (root/'.runtime').mkdir()
@@ -62,7 +63,8 @@ class TimedBombTests(unittest.TestCase):
                 calls.append(mask)
                 return raw | dict(stage_frame=2+len(calls)*2, input_state_raw=[mask],
                                   player=raw['player'] | {'position': [2*(len(calls)%2), 300]},
-                                  combat_reward_events=[damage(str(len(calls)), 0, 0, 1)])
+                                  combat_reward_events=[damage(str(len(calls)), 0, 0, 1),
+                                      pickup(identifier='p'+str(len(calls)))])
             runtime.step_gameplay.side_effect = step
             # Simulate transition helper taking a new snapshot and dropping the batch.
             def bridge(rt, s, *args, **kwargs):
@@ -97,9 +99,10 @@ class TimedBombTests(unittest.TestCase):
                     self.assertEqual(calls[i] & 2, 0)
                 # v15: 1 HP of shot damage at Power 0 gives 15 / 1000.
                 self.assertAlmostEqual(row['telemetry']['reward']['components']['damage'], .015 / 60)
-                self.assertEqual(set(row['telemetry']['reward']['components']), {'damage', 'progress', 'hit', 'jitter'})
+                self.assertEqual(set(row['telemetry']['reward']['components']), {'damage', 'progress', 'hit', 'jitter', 'power_gain'})
                 self.assertAlmostEqual(row['telemetry']['reward']['total'],
-                    .015 / 60 + row['telemetry']['reward']['components']['jitter'])
+                    .015 / 60 + .005 + row['telemetry']['reward']['components']['jitter'])
+                self.assertAlmostEqual(row['telemetry']['reward']['components']['power_gain'], .005)
             self.assertEqual(sum(row['telemetry']['reward']['components']['jitter'] < 0 for row in rows), 5)
 
     def test_initial_probability_and_no_nondecision_draw_or_gradient(self):

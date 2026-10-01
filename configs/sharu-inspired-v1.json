@@ -57,7 +57,7 @@
   },
   "live_training_enabled": false,
   "live_contract": {
-    "reward_version": "th10-rewards-v19",
+    "reward_version": "th10-rewards-v20",
     "bomb_schedule_version": 1,
     "bomb_decision_frames": 12,
     "bomb_press_frames": 2,
@@ -65,7 +65,8 @@
       "damage",
       "progress",
       "hit",
-      "jitter"
+      "jitter",
+      "power_gain"
     ],
     "progress_detection": "verified_engine_pinned_ecl_spells_v2"
   },

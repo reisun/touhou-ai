@@ -35,7 +35,7 @@ class LiveRewardTests(unittest.TestCase):
 
     def test_power_upgrade_source_contract(self):
         from touhou_ai.live_rewards import WEIGHTS, validate_power_upgrade
-        source = dict(reward_version='th10-rewards-v17', reward_weights={k:v for k,v in WEIGHTS.items() if k != 'jitter'} | {'progress_power': 2./60})
+        source = dict(reward_version='th10-rewards-v17', reward_weights={k:v for k,v in WEIGHTS.items() if k not in ('jitter', 'power_gain')} | {'progress_power': 2./60})
         validate_power_upgrade(source)
         for change in (dict(reward_version='th10-rewards-v18'), dict(evasion_only=True),
                        dict(reward_weights=WEIGHTS), dict(reward_weights=source['reward_weights'] | {'hit': -60})):

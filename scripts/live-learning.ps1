@@ -15,6 +15,7 @@ param(
     [switch]$Continuous,
     [string]$TransferEvasion,
     [switch]$UpgradeProgressPower,
+    [switch]$AddPowerReward,
     [ValidateRange(0,5)][int]$ShotStudyGames = 0,
     [ValidateSet(1.0,0.5)][double]$ShotRewardScale = 1.0,
     [string]$ResumeCheckpoint
@@ -28,7 +29,11 @@ if ($Action -eq 'rehearse') {
     $profile = Get-Content (Join-Path $root 'configs/sharu-inspired-v1.json') | ConvertFrom-Json
     $policyChoice = if ($EvasionOnly) { $profile.evasion_policy_overrides } else { $profile.full_policy_overrides }
     $expectedGridContract = if ($policyChoice.cnn_architecture -eq 'narrow_action_grid') { 'th10-dual-grid-v6-action-grid-v1' } else { 'th10-dual-grid-v6' }
-    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v19' }
+    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v20' }
+    if ($AddPowerReward) {
+        if ($EvasionOnly -or -not $DualGrid -or -not $ResumeCheckpoint -or $TransferEvasion -or $UpgradeProgressPower) { throw 'Power reward addition requires a full v19 checkpoint resume' }
+        $expectedReward = 'th10-rewards-v19'
+    }
     if ($UpgradeProgressPower) {
         if ($EvasionOnly -or -not $DualGrid -or -not $ResumeCheckpoint -or $TransferEvasion) { throw 'Power upgrade requires a full dual-grid checkpoint resume' }
         $expectedReward = 'th10-rewards-v17'
@@ -139,6 +144,7 @@ if ($Action -eq 'rehearse') {
         if ($DirectML) { $gameArgs += '--directml' }
         if ($EvasionOnly) { $gameArgs += '--evasion-only' }
         if ($DetailedLogs) { $gameArgs += '--detailed-logs' }
+        if ($AddPowerReward) { $gameArgs += '--add-power-reward' }
         if ($UpgradeProgressPower) { $gameArgs += '--upgrade-progress-power' }
         if ($ShotStudyGames) { $gameArgs += @('--shot-study-games', "$ShotStudyGames", '--shot-reward-scale', $ShotRewardScale.ToString([Globalization.CultureInfo]::InvariantCulture)) }
         if ($ResumePaused) { $gameArgs += '--resume-paused' }

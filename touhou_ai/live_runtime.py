@@ -39,6 +39,7 @@ class LiveRuntime:
             self.lease = ProcessLease(pid)
             self.session = frida.attach(pid)
             source = Path(__file__).with_name("th10_gate.js").read_text()
+            source += '\n' + Path(__file__).with_name('power_pickup_events.js').read_text(encoding='utf-8')
             spell_rows = json.loads(Path(__file__).with_name('spell_progress.json').read_text())
             source += '\nconst NORMAL_SPELL_PROGRESS = ' + json.dumps(spell_rows) + ';\n'
             source += '\n' + Path(__file__).with_name('progress_events.js').read_text(encoding='utf-8')

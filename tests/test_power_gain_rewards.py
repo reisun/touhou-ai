@@ -4,13 +4,22 @@ from touhou_ai.live_rewards import LiveRewards, WEIGHTS, observed_events, valida
 from touhou_ai.focused_policy import reward_input
 
 
-def pickup(before=0, after=1, kind=1, identifier='p'):
+def pickup(before=0, after=1, kind=1, identifier='p', bomb=0):
     return dict(id=identifier, kind='power_gain', confirmed=True,
                 source='verified_power_pickup_v1', item_type=kind,
-                before_raw=before, after_raw=after, amount_raw=after-before)
+                before_raw=before, after_raw=after, amount_raw=after-before, bomb_state=bomb)
 
 
 class PowerGainRewardTests(unittest.TestCase):
+    def test_bomb_pickup_consumed_without_delayed_reward(self):
+        r=LiveRewards();r.reset('test')
+        event=pickup(0,20,4,bomb=1)
+        self.assertEqual(r.calculate('test',[event])[0],0)
+        self.assertEqual(r.calculate('test',[event | {'bomb_state':0}])[0],0)
+        self.assertAlmostEqual(r.calculate('test',[pickup(20,40,4,'next')])[0],.1)
+        for state in (None, True, 2):
+            with self.assertRaises(ValueError):
+                r.calculate('test',[pickup(identifier='bad',bomb=state)])
     def test_amounts_cap_and_dedup(self):
         for event, expected in [(pickup(), .005), (pickup(0,20,4), .1),
                                 (pickup(95,100,11), .025), (pickup(0,1,10), .005)]:

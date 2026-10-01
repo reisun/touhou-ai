@@ -18,6 +18,10 @@ hooks.push(Interceptor.attach(ptr(0x418930), {
             if (this.powerBefore < 0 || this.powerBefore > 100)
                 throw new Error('invalid Power before pickup');
             this.powerNominal = nominal;
+            const bomb = ptr(0x4776ec).readPointer();
+            this.powerBombState = bomb.isNull() ? null : bomb.add(0x28).readS32();
+            if (this.powerBombState !== 0 && this.powerBombState !== 1)
+                throw new Error('unknown pickup-time bomb state');
             this.powerType = type;
             this.trackPower = true;
         } catch (error) { combatError = String(error); }
@@ -34,6 +38,7 @@ hooks.push(Interceptor.attach(ptr(0x418930), {
             combatEvents.push({id: combatSession+':'+(++combatSequence), kind:'power_gain',
                 confirmed:true, source:'verified_power_pickup_v1', amount_raw:amount,
                 before_raw:this.powerBefore, after_raw:after, item_type:this.powerType,
+                bomb_state:this.powerBombState,
                 stage:ptr(0x474c7c).readS32(), frame:ptr(0x474c88).readS32(), gate_tick:tick});
         } catch (error) { combatError = String(error); }
     }

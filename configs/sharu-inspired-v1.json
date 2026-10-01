@@ -57,7 +57,7 @@
   },
   "live_training_enabled": false,
   "live_contract": {
-    "reward_version": "th10-rewards-v20",
+    "reward_version": "th10-rewards-v21",
     "bomb_schedule_version": 1,
     "bomb_decision_frames": 12,
     "bomb_press_frames": 2,

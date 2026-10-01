@@ -1,8 +1,9 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-let callbacks, power=0, item=1;
+let callbacks, power=0, item=1, bomb=0;
 function ptr(n){return {toUInt32:()=>n,toInt32:()=>n,equals:p=>p.toUInt32()===n,
  add:x=>ptr(n+x),readS16:()=>{assert.equal(n,0x474c48);return power;},
- readS32:()=>n===0x1030?item:n===0x474c7c?1:100};}
+ readPointer:()=>{assert.equal(n,0x4776ec);return ptr(0x2000);},isNull:()=>false,
+ readS32:()=>n===0x2028?bomb:n===0x1030?item:n===0x474c7c?1:100};}
 const c={ptr,enabled:true,gameplayGuard:true,hooks:[],combatEvents:[],combatError:null,
  combatSession:'test',combatSequence:0,tick:9,signature:()=>{},
  Interceptor:{attach:(p,cb)=>{assert.equal(p.toUInt32(),0x418930);callbacks=cb;return {};}}};
@@ -21,4 +22,7 @@ pickup(1,20,21,0x123456);assert.equal(c.combatEvents.length,4);
 c.gameplayGuard=false;pickup(1,20,21);assert.equal(c.combatEvents.length,4);
 c.gameplayGuard=true;pickup(4,20,21);assert.match(c.combatError,/unexpected actual Power gain/);
 assert.equal(c.combatEvents.length,4);
+bomb=1;c.combatError=null;pickup(1,20,21);
+assert.equal(c.combatEvents[4].bomb_state,1);
+assert.equal(c.combatEvents[0].bomb_state,0);
 console.log('Power pickup hook: aliases, cap, duplicate identity, caller/collection guards and invalid gain passed');

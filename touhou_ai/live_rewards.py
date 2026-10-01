@@ -1,7 +1,7 @@
 """Versioned real-game rewards; event-time evidence only, never inferred kills."""
 import math
 from touhou_ai.progress_schema import MILESTONES, progress_point
-VERSION = 'th10-rewards-v20'
+VERSION = 'th10-rewards-v21'
 # v17 scale retained, except the explicitly increased progress Power coefficient.
 WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': -.1, 'power_gain': .1}
 
@@ -88,7 +88,10 @@ class LiveRewards:
                         or not 0 <= before < after <= 100
                         or amount != after-before or amount != min(nominal, 100-before)):
                     raise ValueError('invalid verified Power gain')
-                reward = self.weights['power_gain'] * amount / 20
+                if type(e.get('bomb_state')) is not int or e['bomb_state'] not in (0, 1):
+                    raise ValueError('unknown pickup-time bomb state')
+                if e['bomb_state'] == 0:
+                    reward = self.weights['power_gain'] * amount / 20
             elif kind == 'jitter':
                 if e.get('source') != 'actual_displacement_12f_v1':
                     raise ValueError('unverified jitter source')

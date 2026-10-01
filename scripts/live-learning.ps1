@@ -29,7 +29,7 @@ if ($Action -eq 'rehearse') {
     $profile = Get-Content (Join-Path $root 'configs/sharu-inspired-v1.json') | ConvertFrom-Json
     $policyChoice = if ($EvasionOnly) { $profile.evasion_policy_overrides } else { $profile.full_policy_overrides }
     $expectedGridContract = if ($policyChoice.cnn_architecture -eq 'narrow_action_grid') { 'th10-dual-grid-v6-action-grid-v1' } else { 'th10-dual-grid-v6' }
-    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v20' }
+    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v21' }
     if ($AddPowerReward) {
         if ($EvasionOnly -or -not $DualGrid -or -not $ResumeCheckpoint -or $TransferEvasion -or $UpgradeProgressPower) { throw 'Power reward addition requires a full v19 checkpoint resume' }
         $expectedReward = 'th10-rewards-v19'

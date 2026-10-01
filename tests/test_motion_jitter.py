@@ -4,26 +4,36 @@ from touhou_ai.live_rewards import LiveRewards
 
 
 class MotionJitterTests(unittest.TestCase):
-    def test_matches_simulator_formula(self):
-        import numpy as np
-        rng = np.random.default_rng(7)
-        detector = MotionJitter()
-        moves, cooldown = [], 0
-        for delta in rng.integers(-4, 5, size=(10000, 2)):
-            moves = (moves+[delta])[-6:]
-            cooldown = max(0, cooldown-1)
-            flagged = False
-            if len(moves) == 6 and not cooldown:
-                v = np.array(moves); norm = np.linalg.norm(v, axis=1); length = norm.sum()
-                rev = (np.sum(v[1:]*v[:-1],axis=1) < -.5*norm[1:]*norm[:-1]) & (norm[1:]>.01) & (norm[:-1]>.01)
-                flagged = bool(length >= 1 and 1-np.linalg.norm(v.sum(0))/length >= .75 and rev.sum() >= 2)
-                if flagged: cooldown = 6
-            self.assertEqual(detector.add(*delta), flagged)
+    def test_backtracking_with_pauses_and_longer_legs(self):
+        for path in ([(-4, 0), (0, 0), (4, 0), (0, 0)]*8,
+                     ([(-4, 0)]*5+[(4, 0)]*5)*4):
+            d = MotionJitter()
+            flags = [i for i, v in enumerate(path) if d.add(*v)]
+            self.assertTrue(flags)
+            self.assertTrue(all(b-a >= 6 for a, b in zip(flags, flags[1:])))
+            self.assertTrue(all(path[i] != (0, 0) for i in flags))
 
-    def test_reversal_and_cooldown(self):
-        detector = MotionJitter()
-        flags = [i for i in range(24) if detector.add(2 if i % 2 else -2, 0)]
-        self.assertEqual(flags, [5, 11, 17, 23])
+    def test_triangle_and_forward_zigzag_are_not_backtracking(self):
+        for path in ([(0, 0)]*3+[(6.36, 6.36), (-9, 0), (2.82, -2.82)],
+                     [(4, 4), (-4, 4)]*20):
+            d = MotionJitter()
+            self.assertFalse(any(d.add(*v) for v in path))
+
+    def test_never_charge_stop_or_stale_history(self):
+        d = MotionJitter()
+        for x in [-4, -4, -4, 4, -4, 4]:
+            d.add(x, 0)
+        self.assertFalse(d.add(0, 0))
+        for _ in range(18):
+            self.assertFalse(d.add(0, 0))
+        self.assertFalse(d.add(-4, 0))
+
+    def test_repeated_same_direction_never_charged(self):
+        d = MotionJitter()
+        for x in [-4, -4, 4, -4, 4]:
+            d.add(x, 0)
+        for _ in range(30):
+            self.assertFalse(d.add(4, 0))
 
     def test_straight_stationary_and_single_turn(self):
         for path in ([(2, 0)]*24, [(0, 0)]*24, [(2, 0)]*3+[(-2, 0)]*3):
@@ -51,10 +61,10 @@ class MotionJitterTests(unittest.TestCase):
             after = before | dict(stage_frame=i*2+2,
                 player=dict(status=1, position=[((i+1)%2)*2, 300]))
             flagged.append(detector.observe(before, after))
-        self.assertEqual(flagged, [False]*5+[True])
+        self.assertEqual(flagged, [False, False, False, True, False, False])
         rewards = LiveRewards(); rewards.reset('test')
         event = dict(id='jitter:1:12', kind='jitter', confirmed=True,
-                     source='actual_displacement_12f_v1')
+                     source='actual_displacement_backtrack_36f_v2')
         total, parts = rewards.calculate('test', [event])
         self.assertEqual(total, -.1)
         self.assertEqual(parts['jitter'], -.1)
@@ -66,3 +76,18 @@ class MotionJitterTests(unittest.TestCase):
         from touhou_ai.focused_policy import reward_input
         np.testing.assert_array_equal(reward_input({'hit': -1, 'jitter': -.1}),
                                       reward_input({'hit': -1}))
+
+    def test_old_event_source_is_rejected(self):
+        rewards = LiveRewards(); rewards.reset('old')
+        with self.assertRaises(ValueError):
+            rewards.calculate('old', [dict(id='old', kind='jitter', confirmed=True,
+                source='actual_displacement_12f_v1')])
+
+    def test_time_bound_expires_even_with_pauses(self):
+        d = MotionJitter()
+        for x in [-4, 4]:
+            self.assertFalse(d.add(x, 0))
+        for _ in range(18):
+            self.assertFalse(d.add(0, 0))
+        self.assertFalse(d.add(-4, 0))
+        self.assertFalse(d.add(4, 0))

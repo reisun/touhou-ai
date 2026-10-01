@@ -49,7 +49,7 @@ class LiveLearningTests(unittest.TestCase):
                 atomic_json(path, {"ok": True})
             self.assertEqual(len(attempts), 2)
             self.assertIn('true', path.read_text())
-        with patch('touhou_ai.live_learning.atomic_json', side_effect=PermissionError()):
+        with patch('touhou_ai.telemetry_memory.publish', return_value=False):
             self.assertFalse(publish_telemetry({}))
 
     def state(self):
@@ -76,9 +76,28 @@ class LiveLearningTests(unittest.TestCase):
         self.assertEqual(hit_events(before, before), [])
         events = hit_events(before, before | {"lives_raw": 1, "stage_frame": 4})
         self.assertEqual(events[0]["kind"], "hit")
-        for update in ({"lives_raw": 0}, {"lives_raw": 3}, {"stage": 2}, {"replay_mode": 1}):
+        for update in ({"lives_raw": 0}, {"lives_raw": 4}, {"stage": 2}, {"replay_mode": 1}):
             with self.assertRaises(ValueError):
                 hit_events(before, before | update)
+
+    def test_extend_does_not_generate_hit_and_next_death_still_does(self):
+        from touhou_ai.live_learning import hit_events
+        from touhou_ai.live_rewards import LiveRewards, observed_events
+        for stage in range(1, 7):
+            before = self.state() | {'stage': stage}
+            after = before | {'lives_raw': 3, 'stage_frame': 4}
+            self.assertEqual(hit_events(before, after), [])
+            rewards = LiveRewards()
+            rewards.reset('extend')
+            total, components = rewards.calculate('extend', observed_events(before, after))
+            self.assertEqual(total, 0)
+            self.assertEqual(components['hit'], 0)
+            death = after | {'lives_raw': 2, 'stage_frame': 6}
+            total, components = rewards.calculate('extend', observed_events(after, death))
+            self.assertEqual(total, -1)
+            self.assertEqual(components['hit'], -1)
+        with self.assertRaises(ValueError):
+            hit_events(before, after | {'mode_flags': 2})
 
     def test_partial_buffer_has_no_padding_and_bootstraps_truncation(self):
         import numpy as np

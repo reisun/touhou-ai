@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 from touhou_ai.report import summarize
 from touhou_ai.telemetry import packet
 from touhou_ai.obs_stats import ObsStats
+from touhou_ai.telemetry_memory import read as read_telemetry
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -97,17 +98,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                path = self.store.root / "telemetry/latest.json"
                 previous = None
                 heartbeat = time.monotonic()
                 try:
                     while True:
                         try:
-                            stat = path.stat()
-                            signature = (stat.st_mtime_ns, stat.st_size)
-                            if signature != previous:
-                                payload = json.loads(path.read_text(encoding="utf-8"))
-                                self.wfile.write(b"data: " + json.dumps(payload, separators=(",", ":")).encode() + b"\n\n")
+                            update = read_telemetry(self.store.root, previous)
+                            if update is not None:
+                                signature, payload = update
+                                self.wfile.write(b"data: " + payload + b"\n\n")
                                 self.wfile.flush()
                                 previous = signature
                         except (OSError, ValueError):
@@ -146,8 +145,8 @@ class Handler(BaseHTTPRequestHandler):
                     "bullets": None if row.get("bullets") is None else len(row["bullets"]),
                     "lives": row.get("lives_raw")} for i, row in enumerate(rows)]})
             if url.path == "/api/live":
-                path = self.store.root / "telemetry/latest.json"
-                return self.respond(json.loads(path.read_text()) if path.exists() else {"available": False})
+                update = read_telemetry(self.store.root)
+                return self.respond(update[1] if update else {"available": False})
             if url.path == "/api/policy-diagnostic":
                 paths = sorted(self.store.root.glob("policy-*/policy-telemetry.json"), reverse=True)
                 return self.respond(json.loads(paths[0].read_text()) if paths else {"available": False})

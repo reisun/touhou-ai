@@ -79,11 +79,15 @@ class TimedBombPolicy(MultiInputActorCriticPolicy):
         base = self._get_action_dist_from_latent(latent)
         return TimedDistribution(base, (obs['bomb_clock'][:, 0] == 0).to(latent.dtype))
 
-    def forward(self, obs, deterministic=False):
+    def forward_with_distribution(self, obs, deterministic=False):
         pi, vf = self._latents(obs)
         dist = self._scheduled(pi, obs)
         actions = dist.get_actions(deterministic=deterministic)
-        return actions, self.value_net(vf), dist.log_prob(actions)
+        return actions, self.value_net(vf), dist.log_prob(actions), dist.distribution
+
+    def forward(self, obs, deterministic=False):
+        actions, values, log_prob, _ = self.forward_with_distribution(obs, deterministic)
+        return actions, values, log_prob
 
     def evaluate_actions(self, obs, actions):
         pi, vf = self._latents(obs)

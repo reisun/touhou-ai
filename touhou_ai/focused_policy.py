@@ -13,8 +13,11 @@ REWARD_SCALES = np.asarray([1., 100., 10., 1.], dtype=np.float32)
 
 def reward_input(components=None):
     components = components or {}
-    if set(components) - set(REWARD_KEYS):
+    # Jitter shapes the PPO return, but does not change the four legacy inputs.
+    if set(components) - set(REWARD_KEYS) - {'jitter'}:
         raise ValueError('unknown reward input component')
+    if not np.isfinite(components.get('jitter', 0.)):
+        raise ValueError('nonfinite jitter reward')
     values = np.asarray([components.get(k, 0.) for k in REWARD_KEYS], dtype=np.float32)
     if not np.isfinite(values).all():
         raise ValueError('nonfinite reward input')

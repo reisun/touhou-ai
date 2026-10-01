@@ -1,5 +1,8 @@
 # Dual-grid observation design
 
+> Current contract: [Observation v6 / rewards v16](observation-v6.md). The text below records
+> the original design; velocity grids have now been replaced with bullet offsets.
+
 > The opt-in implementation described below was subsequently adopted in live learning.
 > See [switch evidence](dual-grid-switch-20260926.md) and [history](model-learning-history.md).
 

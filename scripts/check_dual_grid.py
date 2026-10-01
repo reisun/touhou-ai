@@ -28,8 +28,8 @@ def scene():
         'bullets': bullets,
         'enemies': [{'position': [x, 80], 'velocity_raw': [0, 1], 'hp': 50, 'hp_max': 100,
                      'is_boss': x == 0} for x in (-96, 0, 96)],
-        'items': [{'position': [x, 200], 'velocity_raw': [0, 1]} for x in (-60, -20, 20, 60)],
-        'lasers': [], 'bomb': {'state': 0}, 'spell': None}
+        'items': [{'position': [x, 200], 'velocity_raw': [0, 1], 'type': 1 if x < 0 else 4} for x in (-60, -20, 20, 60)],
+        'lasers': [], 'player_shots': [], 'bomb': {'state': 0}, 'spell': None}
 
 
 def run(output):
@@ -73,7 +73,7 @@ def run(output):
     fig, axes = plt.subplots(1, 3, figsize=(13, 5), constrained_layout=True)
     whole, local = observation['global_grid'], observation['local_grid']
     rgb = np.zeros((56, 48, 3)); rgb[:, :, 0] = np.clip(whole[3]*3, 0, 1)
-    rgb[:, :, 1] = np.clip(whole[10]*3+whole[11], 0, 1)
+    rgb[:, :, 1] = np.clip(whole[6]*3+whole[7]+whole[11]*5, 0, 1)
     rgb[:, :, 2] = np.clip(whole[0]*3, 0, 1)
     axes[0].imshow(rgb, extent=(-192, 192, 448, 0), interpolation='nearest')
     axes[0].add_patch(Rectangle((-96, 234), 192, 192, fill=False, edgecolor='white'))
@@ -83,9 +83,9 @@ def run(output):
     axes[1].imshow(rgb, extent=(-96, 96, 96, -96), interpolation='nearest')
     axes[1].set_title('Local: 192 x 192 px, 2 px cells\nBlue bullet coverage / green player coverage')
     axes[1].set_xlabel('Relative x (px)'); axes[1].set_ylabel('Relative y (px)')
-    plot=axes[2].imshow(local[3], extent=(-96, 96, 96, -96), interpolation='nearest', cmap='coolwarm', vmin=-1, vmax=1)
-    axes[2].set_title('Local: vertical velocity\nSingle instant, no history')
-    axes[2].set_xlabel('Relative x (px)');fig.colorbar(plot, ax=axes[2], shrink=.6, label='velocity / 10')
+    plot=axes[2].imshow(local[3], extent=(-96, 96, 96, -96), interpolation='nearest', cmap='Blues', vmin=0, vmax=1)
+    axes[2].set_title('Local: bullet coverage offset by 4 frames\nSingle instant, no history')
+    axes[2].set_xlabel('Relative x (px)');fig.colorbar(plot, ax=axes[2], shrink=.6, label='coverage')
     fig.suptitle('Synthetic observation preview (not gameplay or a trained policy)', fontsize=13)
     fig.savefig(output/'preview.png', dpi=150);plt.close(fig)
     print(json.dumps(report))

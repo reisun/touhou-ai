@@ -28,6 +28,21 @@ class DirectMLRollbackTests(unittest.TestCase):
         torch.testing.assert_close(torch.autograd.grad(actual.sum(), logits, retain_graph=True)[0],
                                    torch.autograd.grad(expected.sum(), logits)[0])
 
+    def test_kl_early_stop_metadata(self):
+        from types import SimpleNamespace
+        from touhou_ai.directml_update import validate_update_metadata
+        original = SimpleNamespace(num_timesteps=100, n_epochs=3, target_kl=.02, _n_updates=9)
+        for completed in (1, 2, 3):
+            candidate = SimpleNamespace(**vars(original))
+            candidate._n_updates += completed
+            self.assertEqual(validate_update_metadata(original, candidate), completed)
+        for completed in (0, 4):
+            candidate = SimpleNamespace(**vars(original)); candidate._n_updates += completed
+            with self.assertRaises(ValueError): validate_update_metadata(original, candidate)
+        original.target_kl = None
+        candidate = SimpleNamespace(**vars(original)); candidate._n_updates += 1
+        with self.assertRaises(ValueError): validate_update_metadata(original, candidate)
+
     def test_failed_worker_retries_untouched_parent(self):
         torch.set_num_threads(1)
         model = PPO('MultiInputPolicy', TinyEnv(), n_steps=8, batch_size=4, n_epochs=1, seed=7)

@@ -46,3 +46,9 @@ APIのイベント未記録値はnullのまま保持する。現行バージョ�
 学習プロセスとゲームの再起動は不要。実行中のサーバーはこの変更では停止していない。
 検証: `python -B -m unittest tests.test_obs_stats tests.test_obs_growth tests.test_live_rewards`、
 `node tests/obs_growth.cjs`。ブラウザで530×1080、成長曲線下端1054px、横幅530pxを確認。
+
+## 学習開始時の表示更新
+
+scripts/live-learning.ps1 rehearse は既存の表示サーバーを再起動し、報酬・観測契約の変更をOBS1/OBS2の集計へ反映する。-NoUIでも既存サーバーは更新し、ブラウザ画面を新たに開かない。-NoUIでサーバーが未作成なら起動しない。学習中の表示だけを更新する場合は従来どおりdashboard.ps1 stop / startを使用する。
+
+観測 th10-dual-grid-v3 は全体15ch。青い矩形が現在の自機ショット判定の再描画。OBS2の横棒は全項目共通で0〜max(100,各項目の絶対値)。

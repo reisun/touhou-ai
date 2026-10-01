@@ -1,11 +1,18 @@
 """Versioned real-game rewards; event-time evidence only, never inferred kills."""
 import math
-VERSION = 'th10-rewards-v11'
-WEIGHTS = {'damage': 5., 'damage_power': .5, 'progress': 20., 'progress_life': 30., 'progress_power': 5., 'hit': -10., 'power_down': 0.}
-ENABLED = ['damage', 'progress', 'hit', 'power_down']
-MILESTONES = ('midboss_arrival', 'midboss_defeat', 'boss_arrival', 'boss_defeat')
+from touhou_ai.progress_schema import MILESTONES, progress_point
+VERSION = 'th10-rewards-v19'
+# v17 scale retained, except the explicitly increased progress Power coefficient.
+WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': -.1}
+
+def validate_power_upgrade(manifest):
+    if (manifest.get('reward_version') != 'th10-rewards-v17'
+            or manifest.get('reward_weights') != {k: v for k, v in WEIGHTS.items() if k != 'jitter'} | {'progress_power': 2./60}
+            or manifest.get('evasion_only')):
+        raise ValueError('Power upgrade requires exactly the full v17 reward contract')
+ENABLED = ['damage', 'progress', 'hit', 'jitter']
 # Engine paths: live stage-1 acceptance; stage 1..6 mappings: pinned ECL review.
-VERIFIED_PROGRESS_SOURCES = frozenset({'verified_ecl_progress_v1'})
+VERIFIED_PROGRESS_SOURCES = frozenset({'verified_ecl_progress_v1', 'verified_ecl_progress_v2'})
 
 
 def power_value(raw):
@@ -15,7 +22,8 @@ def power_value(raw):
 
 
 class LiveRewards:
-    def __init__(self):
+    def __init__(self, weights=None):
+        self.weights = dict(WEIGHTS if weights is None else weights)
         self.seen = set()
         self.milestones = set()
 
@@ -46,27 +54,30 @@ class LiveRewards:
                 if type(e.get('bomb_state')) is not int or e['bomb_state'] not in (0, 1):
                     raise ValueError('unknown event-time bomb state')
                 if e['bomb_state'] == 0:
-                    reward = WEIGHTS['damage'] * amount / 1000 * (1 + WEIGHTS['damage_power'] * power)
+                    reward = self.weights['damage'] * amount / 1000 * (1 + self.weights['damage_power'] * power)
             elif kind == 'progress':
                 if e.get('source') not in VERIFIED_PROGRESS_SOURCES:
                     raise ValueError('progress source has not passed real-game acceptance')
-                stage, milestone = e.get('stage'), e.get('milestone')
-                if type(stage) is not int or stage not in range(1, 7) or milestone not in MILESTONES:
-                    raise ValueError('invalid milestone')
+                point = progress_point(e)
+                stage, milestone = point['stage'], point['milestone']
+                key = (stage, milestone, point.get('spell_id_raw'))
                 lives = e.get('lives_raw')
                 if type(lives) is not int or not 0 <= lives <= 8:
                     raise ValueError('invalid milestone reserve lives')
                 power = power_value(e.get('power_raw'))
-                if (stage, milestone) not in milestones:
-                    reward = WEIGHTS['progress'] + WEIGHTS['progress_life'] * lives + WEIGHTS['progress_power'] * power
-                    milestones.add((stage, milestone))
+                if key not in milestones:
+                    if type(e.get('bomb_state')) is not int or e['bomb_state'] not in (0, 1):
+                        raise ValueError('unknown event-time bomb state')
+                    if e['bomb_state'] == 0:
+                        reward = self.weights['progress'] + self.weights['progress_life'] * lives + self.weights['progress_power'] * power
+                    # Suppressed milestones are consumed too; no delayed bonus.
+                    milestones.add(key)
+            elif kind == 'jitter':
+                if e.get('source') != 'actual_displacement_12f_v1':
+                    raise ValueError('unverified jitter source')
+                reward = self.weights['jitter']
             elif kind == 'hit':
-                reward = WEIGHTS['hit']
-            elif kind == 'power_down':
-                amount = e.get('amount')
-                if type(amount) not in (int, float) or not math.isfinite(amount) or not 0 < amount <= 5:
-                    raise ValueError('invalid observed power decrease')
-                reward = WEIGHTS['power_down'] * amount
+                reward = self.weights['hit']
             else:
                 raise ValueError('unsupported reward kind')
             if kind in result:
@@ -79,10 +90,6 @@ class LiveRewards:
 def observed_events(before, after, action=None):
     from touhou_ai.live_learning import hit_events
     events = hit_events(before, after, allow_stage_transition=True)
-    power_before, power_after = power_value(before.get('power_raw')), power_value(after.get('power_raw'))
-    if power_after < power_before:
-        events.append(dict(id=f"power-down:{after['stage']}:{after['stage_frame']}",
-                           kind='power_down', amount=power_before-power_after, confirmed=True))
     for e in after.get('combat_reward_events', []):
         if e.get('source') != 'verified_game_event' or e.get('kind') not in ('damage', 'kill'):
             raise ValueError('unverified combat reward source')

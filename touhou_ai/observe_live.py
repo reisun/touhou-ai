@@ -9,6 +9,7 @@ from touhou_ai.process_lease import ProcessLease
 from touhou_ai.th10_reader import Th10Reader
 from touhou_ai.windows_probe import ReadOnlyProcess
 from touhou_ai.telemetry import packet
+from touhou_ai.telemetry_memory import publish
 
 
 def observe(pid, seconds, output, model_monitor=False):
@@ -24,8 +25,6 @@ def observe(pid, seconds, output, model_monitor=False):
     process = ReadOnlyProcess(pid, config['executable'])
     reader = Th10Reader(process)
     output.mkdir(parents=True, exist_ok=False)
-    latest = Path('artifacts/telemetry/latest.json')
-    latest.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     deadline = started+seconds
     count = dropped = 0
@@ -64,12 +63,7 @@ def observe(pid, seconds, output, model_monitor=False):
                     data['observer'] = {'mode': 'passive_read_only', 'samples': count+1,
                         'dropped_racing_frames': dropped, 'target_hz': 30,
                         'mean_hz': count/max(time.monotonic()-started, 0.001)}
-                    payload = json.dumps(data, allow_nan=False, separators=(',', ':'))
-                    temporary = latest.with_suffix('.tmp')
-                    temporary.write_text(payload, encoding='utf-8')
-                    try:
-                        temporary.replace(latest)
-                    except PermissionError:
+                    if not publish(data):
                         dropped += 1
                     key = (state['stage'], state['stage_frame'], state['replay_mode'])
                     if key != logged_key and logged_bytes < 128*1024*1024:

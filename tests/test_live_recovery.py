@@ -86,6 +86,8 @@ class RecoveryTests(unittest.TestCase):
                 self.assertEqual([c.args[0] for c in command.call_args_list], ['start', 'stop', 'start'])
                 self.assertTrue(command.call_args_list[1].kwargs['recovery'])
                 self.assertEqual(start.call_count, 2)
+                self.assertFalse(report['detailed_logs'])
+                self.assertEqual(list((root/'artifacts/test').glob('episode-*.jsonl')), [])
                 self.assertTrue(report['recoveries'][0]['restarted'])
                 self.assertTrue(report['paused_on_exit'])
                 self.assertEqual(len(report['episodes']), int(valid_steps >= 32))

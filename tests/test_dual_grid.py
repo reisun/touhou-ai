@@ -20,7 +20,7 @@ def state():
     return {'stage': 1, 'lives_raw': 2, 'power_raw': 40,
             'player': {'position': [0, 300], 'velocity_raw': [0, 0], 'hitbox_raw': [1, 1],
                        'status': 1, 'invincibility_raw': 0, 'focus_raw': 0},
-            'bullets': [], 'enemies': [], 'items': [], 'lasers': [],
+            'bullets': [], 'enemies': [], 'items': [], 'lasers': [], 'player_shots': [],
             'bomb': {'state': 0}, 'spell': None}
 
 
@@ -35,6 +35,35 @@ def enemy(x, y, hp=50):
 
 
 class DualGridTests(unittest.TestCase):
+    def test_offsets_keep_stationary_bullets_and_include_incoming_bullets(self):
+        raw = state(); raw['bullets'] = [bullet(vx=0, vy=0)]
+        obs = DualGridContract().encode(raw)
+        np.testing.assert_array_equal(obs['local_grid'][1], obs['local_grid'][2])
+        np.testing.assert_array_equal(obs['local_grid'][1], obs['local_grid'][3])
+        np.testing.assert_array_equal(obs['global_grid'][0], obs['global_grid'][2])
+        raw['bullets'] = [bullet(104, 300, -4, 0)]
+        obs = DualGridContract().encode(raw)
+        self.assertEqual(obs['local_grid'][1].sum(), 0)
+        self.assertGreater(obs['local_grid'][2].sum(), 0)
+        self.assertEqual(obs['local_grid'][3].sum(), 4)
+        raw['bullets'] = [bullet(200, 300, -4, 0)]
+        obs = DualGridContract().encode(raw)
+        self.assertEqual(obs['global_grid'][0].sum(), 0)
+        self.assertEqual(obs['global_grid'][1].sum(), 0)
+        self.assertGreater(obs['global_grid'][2].sum(), 0)
+        raw['bullets'][0]['flags_raw'] = 0
+        obs = DualGridContract().encode(raw)
+        self.assertEqual(obs['global_grid'][:3].sum(), 0)
+
+    def test_enemy_and_item_velocity_are_not_model_features(self):
+        raw = state(); raw['enemies'] = [enemy(0, 200)]
+        raw['items'] = [{'position': [0, 100], 'type': 2}]
+        expected = DualGridContract().encode(raw)
+        del raw['enemies'][0]['velocity_raw']
+        actual = DualGridContract().encode(raw)
+        np.testing.assert_array_equal(actual['global_grid'], expected['global_grid'])
+        self.assertFalse(any(name.endswith(('_vx', '_vy')) for name in SPEC['global_channels']+SPEC['local_channels']))
+
     def test_fractional_coverage_and_extent_intersecting_from_outside(self):
         env = DualGridContract(); raw = state()
         raw['bullets'] = [bullet(), bullet(97, 300)]
@@ -48,7 +77,7 @@ class DualGridTests(unittest.TestCase):
         np.testing.assert_array_equal(obs['local_grid'][1, 47:49, 47:49], 1)
         # Center is outside the 96px radius, but hitbox overlaps the last column.
         np.testing.assert_array_equal(obs['local_grid'][1, 47:49, 95], .5)
-        np.testing.assert_allclose(obs['local_grid'][2, 47:49, 47:49], .2, atol=.0001)
+        self.assertEqual(obs['local_grid'][2, 47:49, 47:49].sum(), 0)
         shifted = copy.deepcopy(raw)
         for entity in [shifted['player'], *shifted['bullets']]:
             entity['position'][0] += 13.25; entity['position'][1] -= 5.5
@@ -59,14 +88,14 @@ class DualGridTests(unittest.TestCase):
         raw['bullets'] = [bullet(-180+i*8, 40) for i in range(45)] + [bullet()]
         raw['enemies'] = [enemy(-180+i*8, 80) for i in range(30)]
         raw['enemies'][-1]['is_boss'] = True
-        raw['items'] = [{'position': [-180+i*8, 100], 'velocity_raw': [0, 1]} for i in range(45)]
+        raw['items'] = [{'position': [-180+i*8, 100], 'velocity_raw': [0, 1], 'type': 2} for i in range(45)]
         obs = DualGridContract().encode(raw, {'damage': 1})
         whole = obs['global_grid']
         self.assertEqual(np.count_nonzero(whole[0]), 46)
         self.assertEqual(np.count_nonzero(whole[3]), 30)
-        self.assertEqual(np.count_nonzero(whole[10]), 45)
-        np.testing.assert_array_equal(whole[6][whole[3] > 0], .5)
-        self.assertEqual(np.count_nonzero(whole[9]), 1)
+        self.assertEqual(np.count_nonzero(whole[6]), 45)
+        np.testing.assert_array_equal(whole[4][whole[3] > 0], np.float16(50/100000))
+        self.assertEqual(whole.shape, (12, 56, 48))
         self.assertGreater(whole[0, 37, 24], 0)  # Near bullet remains in global view.
         self.assertEqual(obs['previous_rewards'][0], .5)
         self.assertEqual(DualGridContract().encode(raw)['previous_rewards'].sum(), 0)
@@ -75,12 +104,15 @@ class DualGridTests(unittest.TestCase):
         env = DualGridContract(); raw = state()
         raw['bullets'] = [bullet(vx=4), bullet(vx=-4), bullet(30, 300) | {'flags_raw': 0}]
         obs = env.encode(raw)
-        self.assertEqual(obs['local_grid'][2].sum(), 0)
+        self.assertGreater(obs['local_grid'][2].sum(), 0)
+        self.assertEqual(obs['local_grid'][2, 47:49, 47:49].sum(), 0)
+        self.assertEqual(np.count_nonzero(obs['global_grid'][1]), 2)
+        self.assertEqual(np.count_nonzero(obs['global_grid'][2]), 2)
         self.assertEqual(np.count_nonzero(obs['global_grid'][0]), 1)
         raw['enemies'] = [enemy(0, 200) | {'hp': None}, enemy(0, 200)]
         obs = env.encode(raw)
-        self.assertEqual(obs['global_grid'][6, 25, 24], .5)
-        self.assertEqual(obs['global_grid'][7, 25, 24], .5)
+        self.assertEqual(obs['global_grid'][4, 25, 24], np.float16(50/100000))
+        self.assertEqual(obs['global_grid'][5, 25, 24], np.float16(100/100000))
         with self.assertRaisesRegex(ValueError, 'flags'):
             bad = copy.deepcopy(raw); del bad['bullets'][0]['flags_raw']; env.encode(bad)
         with self.assertRaisesRegex(ValueError, 'unavailable'):
@@ -89,6 +121,25 @@ class DualGridTests(unittest.TestCase):
             bad = copy.deepcopy(raw); bad['bullets'][0]['hitbox_raw'] = [-2, 4]; env.encode(bad)
         with self.assertRaisesRegex(ValueError, 'velocity'):
             bad = copy.deepcopy(raw); bad['bullets'][0]['velocity_raw'] = [float('nan'), 0]; env.encode(bad)
+
+    def test_hp_means_include_boss_exclude_unknown_and_clip_after_mean(self):
+        env = DualGridContract(); raw = state()
+        raw['enemies'] = [enemy(0, 200, 20000) | {'hp_max': 40000},
+                          enemy(0, 200, 100000) | {'hp_max': 200000, 'is_boss': True},
+                          enemy(0, 200) | {'hp': None}]
+        obs = env.encode(raw)['global_grid']
+        self.assertEqual(obs[4, 25, 24], np.float16(.6))
+        self.assertEqual(obs[5, 25, 24], 1)  # Average 120000, then clip.
+        self.assertEqual(obs[3, 25, 24], np.float16(np.log1p(3)/np.log(17)))
+        raw['enemies'][1]['is_boss'] = False
+        np.testing.assert_array_equal(obs, env.encode(raw)['global_grid'])
+        for enemies in ([], [enemy(0, 200) | {'hp': None}]):
+            raw['enemies'] = enemies
+            self.assertEqual(env.encode(raw)['global_grid'][4:6].sum(), 0)
+        raw['enemies'] = [enemy(0, 200, 0)]
+        obs = env.encode(raw)['global_grid']
+        self.assertEqual(obs[4, 25, 24], 0)
+        self.assertEqual(obs[5, 25, 24], np.float16(.001))
 
     def test_viewport_boundaries_and_laser_layers(self):
         self.assertIsNone(rectangle(np.array([1000, 1000]), np.array([2, 2]), np.array([0, 0]), 2, (96, 96)))
@@ -115,17 +166,15 @@ class DualGridTests(unittest.TestCase):
                        rng.uniform(190, 410, 300), rng.uniform(-8, 8, 300), rng.uniform(-8, 8, 300),
                        rng.uniform(.1, 30, 300), rng.uniform(.1, 30, 300))]
         origin = np.array([-96., 204.]); actual = np.zeros((6, 96, 96), np.float32)
-        expected = np.zeros_like(actual); weights = np.zeros((96, 96), np.float32)
-        for b in bullets:
-            patch = rectangle(np.array(b['position']), np.array(b['hitbox_raw'])/2, origin, 2, (96, 96))
-            if patch is None:
-                continue
-            sl, coverage = patch
-            expected[1][sl] = np.maximum(expected[1][sl], coverage)
-            weights[sl] += coverage
-            for axis in range(2):
-                expected[2+axis][sl] += coverage*(b['velocity_raw'][axis]/10)
-        expected[2:4] /= np.maximum(weights, np.finfo(np.float32).tiny)
+        expected = np.zeros_like(actual)
+        for channel, frames in ((1, 0), (2, 2), (3, 4)):
+            for b in bullets:
+                position = np.array(b['position']) + frames*np.array(b['velocity_raw'])
+                patch = rectangle(position, np.array(b['hitbox_raw'])/2, origin, 2, (96, 96))
+                if patch is None:
+                    continue
+                sl, coverage = patch
+                expected[channel][sl] = np.maximum(expected[channel][sl], coverage)
         paint_bullets(actual, bullets, origin)
         np.testing.assert_allclose(actual, expected, atol=2e-7)
 
@@ -136,6 +185,8 @@ class DualGridTests(unittest.TestCase):
                     policy_kwargs={'features_extractor_class': DualGridFeatures,
                                    'net_arch': {'pi': [256, 128], 'vf': [256, 128]}})
         raw = state(); raw['bullets'] = [bullet(12.3, 290.2)]; raw['enemies'] = [enemy(30, 40)]
+        raw['items'] = [{'type': 4, 'position': [0, 100]} for _ in range(6)]
+        raw['player_shots'] = [{'position': [0,100], 'hitbox_raw': [16,48], 'geometry': 'th10-player-shot-aabb-v1'}]
         obs = env.encode(raw, {'damage': .1})
         buffer = GridRolloutBuffer(4, env.observation_space, env.action_space, device='cpu')
         with torch.no_grad():
@@ -169,7 +220,7 @@ class DualGridTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); run = root/'artifacts/run'; run.mkdir(parents=True)
             checkpoint = run/'model.zip'; checkpoint.write_bytes(b'test')
-            manifest = {'backend': 'real_th10', 'contract': 'th10-focused-bullets-v1', 'episodes': [
+            manifest = {'backend': 'real_th10', 'contract': 'th10-dual-grid-v4', 'episodes': [
                 {'checkpoint': checkpoint.name, 'reload_verified': True,
                  'checkpoint_sha256': hashlib.sha256(checkpoint.read_bytes()).hexdigest()}]}
             with patch('touhou_ai.live_learning.ROOT', root):

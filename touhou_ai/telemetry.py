@@ -20,7 +20,7 @@ def packet(raw, episode, source="recording", timestamp=None):
         raise ValueError("unknown telemetry source")
     player = raw.get("player")
     entities = {}
-    for kind in ("bullets", "enemies", "items", "lasers"):
+    for kind in ("bullets", "enemies", "items", "lasers", "player_shots"):
         values = raw.get(kind)
         entities[kind] = None if values is None else [
             {"position": point(entity), "velocity_raw": entity.get("velocity_raw"),

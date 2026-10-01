@@ -24,6 +24,25 @@ def model():
 
 
 class TimedBombTests(unittest.TestCase):
+    def test_single_pass_matches_actions_values_and_probabilities(self):
+        from unittest.mock import patch
+        policy = model().policy
+        obs, _ = policy.obs_to_tensor({'player': np.zeros(2, dtype=np.float32),
+                                     'bomb_clock': np.zeros(1, dtype=np.float32)})
+        for clock in (0., .5):
+            obs['bomb_clock'][:] = clock
+            torch.manual_seed(123)
+            expected = policy(obs)
+            probs = [d.probs.clone() for d in policy.get_distribution(obs).distribution]
+            torch.manual_seed(123)
+            with patch.object(policy, '_latents', wraps=policy._latents) as latents:
+                actual = policy.forward_with_distribution(obs)
+                self.assertEqual(latents.call_count, 1)
+            for a, b in zip(expected, actual[:3]):
+                torch.testing.assert_close(a, b)
+            for a, b in zip(probs, actual[3]):
+                torch.testing.assert_close(a, b.probs)
+
     def test_live_collector_clock_and_transition_event_retention(self):
         import json
         import shutil
@@ -42,6 +61,7 @@ class TimedBombTests(unittest.TestCase):
             def step(mask, frames):
                 calls.append(mask)
                 return raw | dict(stage_frame=2+len(calls)*2, input_state_raw=[mask],
+                                  player=raw['player'] | {'position': [2*(len(calls)%2), 300]},
                                   combat_reward_events=[damage(str(len(calls)), 0, 0, 1)])
             runtime.step_gameplay.side_effect = step
             # Simulate transition helper taking a new snapshot and dropping the batch.
@@ -54,8 +74,16 @@ class TimedBombTests(unittest.TestCase):
                  patch.object(learner, 'publish_telemetry', return_value=True), \
                  patch('touhou_ai.model_monitor.model_metadata', return_value={}), \
                  patch('touhou_ai.live_acceptance.pause', return_value={'pause_words': [2, 2]}):
-                report = learner.train(root/'artifacts/test', episodes=1, max_steps=32, dual_grid=True)
+                report = learner.train(root/'artifacts/test', episodes=1, max_steps=32, dual_grid=True, detailed_logs=True)
             rows = [json.loads(x) for x in (root/'artifacts/test/episode-1.jsonl').read_text().splitlines()]
+            self.assertTrue(rows, report)
+            self.assertIsNone(rows[0]['previous_step_timing_ms'])
+            timing = rows[1]['previous_step_timing_ms']
+            self.assertEqual(timing['step'], 1)
+            for key in ('inference_ms', 'step_observation_transition_ms', 'encode_ms', 'telemetry_ms', 'log_ms', 'publish_ms', 'total_ms'):
+                self.assertGreaterEqual(timing[key], 0)
+            self.assertGreaterEqual(timing['total_ms'], timing['inference_ms']+timing['encode_ms']+timing['log_ms'])
+            self.assertEqual(json.loads((root/'artifacts/test/last-step-timing.json').read_text())['step'],32)
             self.assertEqual(report['status'], 'stopped')
             self.assertEqual(report['updates'], 0)
             self.assertEqual(report['configured_ppo']['gamma'], .9995)
@@ -67,8 +95,12 @@ class TimedBombTests(unittest.TestCase):
             for i, row in enumerate(rows):
                 if i % 6:
                     self.assertEqual(calls[i] & 2, 0)
-                self.assertAlmostEqual(row['telemetry']['reward']['components']['damage'], .005)
-                self.assertEqual(set(row['telemetry']['reward']['components']), {'damage', 'progress', 'hit', 'power_down'})
+                # v15: 1 HP of shot damage at Power 0 gives 15 / 1000.
+                self.assertAlmostEqual(row['telemetry']['reward']['components']['damage'], .015 / 60)
+                self.assertEqual(set(row['telemetry']['reward']['components']), {'damage', 'progress', 'hit', 'jitter'})
+                self.assertAlmostEqual(row['telemetry']['reward']['total'],
+                    .015 / 60 + row['telemetry']['reward']['components']['jitter'])
+            self.assertEqual(sum(row['telemetry']['reward']['components']['jitter'] < 0 for row in rows), 5)
 
     def test_initial_probability_and_no_nondecision_draw_or_gradient(self):
         m = model()

@@ -1,11 +1,14 @@
 """Lossless reward windows from the collector log, independent of SSE sampling."""
 from collections import deque
+from touhou_ai.telemetry_memory import read as read_memory
 import json
 import threading
 import time
+from pathlib import Path
 from touhou_ai.live_rewards import WEIGHTS, ENABLED, VERSION, MILESTONES, VERIFIED_PROGRESS_SOURCES
 from touhou_ai.bullet_scope import SPEC
 from touhou_ai.dual_grid import SPEC as GRID_SPEC
+from touhou_ai.progress_schema import progress_point, PROGRESS_AXIS
 
 
 class ObsStats:
@@ -18,6 +21,11 @@ class ObsStats:
         self.weights = WEIGHTS
         self.run = None
         self.progress_cache = {}
+        self.manifest_cache = {}
+        self.manifests = []
+        self.next_manifest_check = 0
+        self.growth_key = None
+        self.growth = []
 
     def episode_progress(self, run, episode):
         """Join by run + explicit episode number, never list position or reward.
@@ -53,42 +61,118 @@ class ObsStats:
                         stage, milestone = event.get('stage'), event.get('milestone')
                         if (event.get('kind') != 'progress' or event.get('confirmed') is not True
                                 or event.get('source') not in VERIFIED_PROGRESS_SOURCES
-                                or type(stage) is not int or not 1 <= stage <= 6
-                                or milestone not in MILESTONES):
+                                or type(stage) is not int or not 1 <= stage <= 6):
                             continue
-                        rank = (stage - 1) * len(MILESTONES) + MILESTONES.index(milestone) + 1
+                        try:
+                            point = progress_point(event)
+                        except ValueError:
+                            continue
+                        rank = point['rank']
                         if best is None or rank > best['rank']:
-                            best = dict(stage=stage, milestone=milestone, rank=rank)
+                            best = dict(point)
             self.progress_cache[path] = (signature, best)
             return best
         except OSError:
             return None
 
+    def _read_cached(self, path):
+        signature = (path.stat().st_mtime_ns, path.stat().st_size)
+        cached = self.manifest_cache.get(path)
+        if cached and cached[0] == signature:
+            return cached[1]
+        value = json.loads(path.read_text(encoding='utf-8-sig'))
+        self.manifest_cache[path] = (signature, value)
+        return value
+
+    def _refresh_manifests(self):
+        now = time.monotonic()
+        if now < self.next_manifest_check:
+            return self.manifests
+        self.next_manifest_check = now + 1
+        record_path = self.root.parent / '.runtime' / 'live-learning.json'
+        try:
+            if record_path.exists():
+                record = self._read_cached(record_path)
+                name = record['RunId']
+                if not isinstance(name, str) or not name.startswith('live-learning-') or Path(name).name != name:
+                    return []
+                path = self.root / name / 'status.json'
+            elif self.manifests:
+                path = self.manifests[-1][0]
+            else:
+                # Offline/legacy artifacts only. Managed LIVE never scans other runs.
+                paths = sorted(self.root.glob('live-learning-*/status.json'))
+                if not paths:
+                    return []
+                path = paths[-1]
+            latest = self._read_cached(path)
+            chain = [(path, latest)]
+            seen = {path.resolve()}
+            current = latest
+            while current.get('resumed_from'):
+                parent = Path(current['resumed_from']).parent / 'status.json'
+                resolved = parent.resolve()
+                if resolved in seen or resolved.parent.parent != self.root.resolve():
+                    break
+                seen.add(resolved)
+                # Completed ancestors cannot change while this learner runs.
+                previous = self.manifest_cache.get(parent)
+                previous = previous[1] if previous else self._read_cached(parent)
+                transition = current.get('reward_transition') or {}
+                reward_match = all(previous.get(k) == current.get(k) for k in ('reward_version', 'reward_weights'))
+                explicit_transition = (transition.get('from') == previous.get('reward_version')
+                    and transition.get('to') == current.get('reward_version')
+                    and transition.get('old_weights') == previous.get('reward_weights')
+                    and transition.get('new_weights') == current.get('reward_weights')
+                    and transition.get('policy_optimizer_rng_preserved') is True)
+                if (any(previous.get(k) != current.get(k) for k in
+                        ('contract', 'action_contract', 'bullet_scope'))
+                        or not (reward_match or explicit_transition)):
+                    break
+                chain.append((parent, previous))
+                current = previous
+            if not record_path.exists():
+                # Preserve standalone archive viewing when no managed run exists.
+                chain = []
+                for archive in sorted(self.root.glob('live-learning-*/status.json')):
+                    item = self._read_cached(archive)
+                    if all(item.get(k) == latest.get(k) for k in ('reward_version', 'contract', 'action_contract', 'bullet_scope')):
+                        chain.append((archive, item))
+                self.manifests = chain
+            else:
+                self.manifests = list(reversed(chain))
+        except (OSError, ValueError, KeyError, TypeError):
+            # A new run may be registered before its manifest is ready. Never show the old run.
+            self.manifests = []
+        return self.manifests
+
     def snapshot(self):
         with self.lock:
-            manifests = []
-            for path in sorted(self.root.glob('live-learning-*/status.json')):
-                try:
-                    status = json.loads(path.read_text(encoding='utf-8'))
-                    if (status.get('reward_version') == VERSION
-                            and status.get('bullet_scope') in (SPEC, GRID_SPEC)):
-                        manifests.append((path, status))
-                except (OSError, ValueError):
-                    continue
-            if manifests:
-                latest_path, latest = manifests[-1]
-                manifests = [(p, s) for p, s in manifests
-                             if s.get('bullet_scope') == latest.get('bullet_scope')
-                             and s.get('contract') == latest.get('contract')]
-                if self.run != latest_path.parent:
-                    self.rows.clear()
-                    self.path, self.offset = None, 0
-                    self.weights = latest.get('reward_weights', WEIGHTS)
-                    self.run = latest_path.parent
-            growth = [dict(e, run=p.parent.name, max_progress=self.episode_progress(p.parent, e.get('episode'))) for p, s in manifests
-                      if s.get('backend') == 'real_th10' for e in s.get('episodes', [])
-                      if e.get('reload_verified')]
-            paths = [] if not manifests else sorted(manifests[-1][0].parent.glob('episode-*.jsonl'),
+            manifests = self._refresh_manifests()
+            latest_path, latest = manifests[-1] if manifests else (None, {})
+            active = latest_path.parent if latest_path else None
+            if self.run != active:
+                self.rows.clear()
+                self.path, self.offset = None, 0
+                self.run = active
+            self.weights = latest.get('reward_weights', {})
+            key = tuple((str(p), id(s)) for p, s in manifests)
+            if key != self.growth_key:
+                self.growth = [dict(e, run=p.parent.name, reward_version=status.get('reward_version'),
+                    max_progress=e['max_progress'] if 'max_progress' in e else self.episode_progress(p.parent, e.get('episode')))
+                    for p, status in manifests if status.get('backend') == 'real_th10'
+                    for e in status.get('episodes', []) if e.get('reload_verified')]
+                self.growth_key = key
+            growth = self.growth
+            memory_mode = bool(manifests and latest.get('ui_stats_transport') == 'shared_memory_v1')
+            if memory_mode:
+                update = read_memory(self.root / 'ui-stats')
+                if update is not None:
+                    summary = json.loads(update[1])
+                    if summary.get('run') == latest_path.parent.name:
+                        self.rows = deque(summary['rows'], maxlen=10000)
+                        self.weights = summary['weights']
+            paths = [] if not manifests or memory_mode else sorted(manifests[-1][0].parent.glob('episode-*.jsonl'),
                                                     key=lambda p: int(p.stem.split('-')[-1]))
             # Include adjacent episodes in the same wall-clock window.
             for path in paths:
@@ -128,10 +212,11 @@ class ObsStats:
                     row['reward']+row['gamma']*next_row['value']-row['value']
                     if next_row and next_row['episode'] == row['episode'] else None)
                 points.append(dict(row, td=td))
-            enabled = rows[-1]['enabled'] if rows else ENABLED
+            enabled = rows[-1]['enabled'] if rows else (latest.get('reward_enabled', ENABLED) if manifests else ENABLED)
             totals = {k: sum(p['components'].get(k, 0) for p in points) for k in enabled}
             return {'start': end-30, 'end': end, 'points': points, 'totals': totals, 'weights': self.weights, 'enabled': enabled,
-                    'growth': growth, 'samples': len(points),
+                    'active_run': self.run.name if self.run else None, 'reward_version': latest.get('reward_version'),
+                    'growth': growth, 'progress_axis': PROGRESS_AXIS, 'samples': len(points),
                     'td_mean': (sum(p['td'] for p in points if p['td'] is not None)/
                                 sum(p['td'] is not None for p in points))
                                if any(p['td'] is not None for p in points) else None}

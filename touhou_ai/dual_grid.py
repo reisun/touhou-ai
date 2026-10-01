@@ -12,20 +12,23 @@ from stable_baselines3.common.buffers import DictRolloutBuffer
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from touhou_ai.focused_policy import reward_input
+from touhou_ai.power_items import power_item_raw, POWER_GRID_SCALE, POWER_GRID_MAX, MAX_ITEMS
 
-CONTRACT = 'th10-dual-grid-v2'
-LOCAL_CHANNELS = ('player_coverage', 'bullet_coverage', 'bullet_vx', 'bullet_vy',
+CONTRACT = 'th10-dual-grid-v6'
+LOCAL_CHANNELS = ('player_coverage', 'bullet_coverage', 'bullet_coverage_2f', 'bullet_coverage_4f',
                   'laser_coverage', 'laser_field_validated')
-GLOBAL_CHANNELS = ('bullet_density', 'bullet_vx', 'bullet_vy', 'enemy_density',
-                   'enemy_vx', 'enemy_vy', 'enemy_hp_ratio', 'enemy_hp_known',
-                   'enemy_hp_max', 'boss_density', 'item_density', 'player',
-                   'laser_coverage', 'laser_field_validated')
-SPEC = {'version': 1, 'shape': 'dual_grid', 'local_pixels': 192, 'local_cell_pixels': 2,
+GLOBAL_CHANNELS = ('bullet_density', 'bullet_density_2f', 'bullet_density_4f', 'enemy_density',
+                   'enemy_hp', 'enemy_hp_max', 'item_density', 'player',
+                   'laser_coverage', 'laser_field_validated', 'player_shot_coverage', 'power_amount')
+SPEC = {'version': 6, 'shape': 'dual_grid', 'local_pixels': 192, 'local_cell_pixels': 2,
         'global_pixels': [384, 448], 'global_cell_pixels': 8, 'history': 0,
         'individual_bullets': 0, 'individual_items': 0, 'near_bullets': 0,
         'local_channels': list(LOCAL_CHANNELS), 'global_channels': list(GLOBAL_CHANNELS),
-        'geometry': 'pinned_binary_aabb_v1', 'velocity_scale': 10,
-        'grid_storage': 'float16_roundtrip_before_policy', 'all_entities': True}
+        'geometry': 'pinned_binary_aabb_v1', 'bullet_offsets_frames': [0, 2, 4],
+        'motion_encoding': 'per_bullet_observed_velocity_offsets',
+        'grid_storage': 'float16_roundtrip_before_policy', 'all_entities': True,
+        'player_shots': 'th10-player-shot-aabb-v1',
+        'power_items': 'pinned_types_1_4_10_11', 'power_amount_raw_scale': POWER_GRID_SCALE}
 
 
 def pair(value, name):
@@ -65,37 +68,33 @@ def paint_laser(grid, channel, verified_channel, collision, origin, cell):
     x0, y0 = lo; x1, y1 = hi
     if x0 >= x1 or y0 >= y1:
         return
-    coverage = np.zeros((y1-y0, x1-x0), dtype=np.float32)
-    for ox in (.25, .75):
-        for oy in (.25, .75):
-            dx = origin[0]+(np.arange(x0, x1)[None, :]+ox)*cell-pos[0]
-            dy = origin[1]+(np.arange(y0, y1)[:, None]+oy)*cell-pos[1]
-            along, across = dx*c+dy*s, -dx*s+dy*c
-            coverage += ((along >= 0) & (along <= length) & (np.abs(across) <= width/2))*.25
+    # Evaluate all four samples together, retaining the original arithmetic
+    # order at rectangle edges. Axes are (sample offset, y, x).
+    dx = origin[0]+(np.arange(x0, x1)[None, None, :]+np.array([.25,.25,.75,.75])[:,None,None])*cell-pos[0]
+    dy = origin[1]+(np.arange(y0, y1)[None, :, None]+np.array([.25,.75,.25,.75])[:,None,None])*cell-pos[1]
+    along, across = dx*c+dy*s, -dx*s+dy*c
+    coverage = (((along >= 0) & (along <= length) & (np.abs(across) <= width/2))
+                .sum(axis=0).astype(np.float32)*.25)
     sl = (slice(y0, y1), slice(x0, x1))
     grid[channel][sl] = np.maximum(grid[channel][sl], coverage)
     if collision['field_validated']:
         grid[verified_channel][sl] = np.maximum(grid[verified_channel][sl], coverage)
 
 
-def bin_entities(entities, channels, grid):
-    """Point locations; density and mean velocities. No top-N cap."""
+def bin_entities(entities, channels, grid, frames=0):
+    """Point density, optionally offset each bullet before binning. No top-N cap."""
     counts = np.zeros(grid.shape[1:], dtype=np.float32)
     records = []
     if entities:
         positions = entity_pairs(entities, 'position') + [192, 0]
-        velocities = entity_pairs(entities, 'velocity_raw')
+        if frames:
+            positions += frames * entity_pairs(entities, 'velocity_raw')
         selected = np.flatnonzero((positions[:, 0] >= 0) & (positions[:, 0] < 384)
                                  & (positions[:, 1] >= 0) & (positions[:, 1] < 448))
         ix, iy = (positions[selected]//8).astype(int).T
         np.add.at(counts, (iy, ix), 1)
-        if len(channels) == 3:
-            np.add.at(grid[channels[1]], (iy, ix), velocities[selected, 0]/10)
-            np.add.at(grid[channels[2]], (iy, ix), velocities[selected, 1]/10)
         records = [(entities[i], y, x) for i, y, x in zip(selected, iy, ix)]
     grid[channels[0]] = np.log1p(counts)/np.log(17)
-    if len(channels) == 3:
-        grid[list(channels[1:])] /= np.maximum(counts, 1)
     return counts, records
 
 
@@ -111,16 +110,22 @@ def paint_bullets(local, active, origin):
         return
     positions = entity_pairs(active, 'position')
     sizes = entity_pairs(active, 'hitbox_raw')
-    velocities = entity_pairs(active, 'velocity_raw')/10
+    velocities = entity_pairs(active, 'velocity_raw')
     if np.any(sizes <= 0) or np.any(sizes > 512):
         raise ValueError('invalid bullet hitbox extent')
+    for channel, frames in ((1, 0), (2, 2), (3, 4)):
+        shifted = positions + frames * velocities
+        paint_bullet_coverage(local[channel], shifted, sizes, origin)
+
+
+def paint_bullet_coverage(layer, positions, sizes, origin):
+    """Rasterize each full-size hitbox independently, then take maximum coverage."""
     lo, hi = (positions-sizes*.5-origin)/2, (positions+sizes*.5-origin)/2
     starts = np.clip(np.floor(lo), 0, 96).astype(int)
     ends = np.clip(np.ceil(hi), 0, 96).astype(int)
     widths = ends-starts
     areas = widths[:, 0]*widths[:, 1]
     selected = np.flatnonzero(areas > 0)
-    weights = np.zeros((96, 96), dtype=np.float32)
     # At most 128 * 96 * 96 cells per temporary batch even for huge hitboxes.
     for offset in range(0, len(selected), 128):
         group = selected[offset:offset+128]
@@ -132,18 +137,16 @@ def paint_bullets(local, active, origin):
         dx = np.maximum(0, np.minimum(x+1, hi[index, 0])-np.maximum(x, lo[index, 0]))
         dy = np.maximum(0, np.minimum(y+1, hi[index, 1])-np.maximum(y, lo[index, 1]))
         coverage = (dx*dy).astype(np.float32)
-        np.maximum.at(local[1], (y, x), coverage)
-        np.add.at(weights, (y, x), coverage)
-        np.add.at(local[2], (y, x), coverage*velocities[index, 0])
-        np.add.at(local[3], (y, x), coverage*velocities[index, 1])
-    local[2:4] /= np.maximum(weights, np.finfo(np.float32).tiny)
+        np.maximum.at(layer, (y, x), coverage)
 
 
 class DualGridContract(gym.Env):
     def __init__(self):
+        global_high = np.ones((len(GLOBAL_CHANNELS), 56, 48), dtype=np.float32)
+        global_high[GLOBAL_CHANNELS.index('power_amount')] = POWER_GRID_MAX
         self.observation_space = gym.spaces.Dict({
             'local_grid': gym.spaces.Box(-1, 1, (len(LOCAL_CHANNELS), 96, 96), dtype=np.float32),
-            'global_grid': gym.spaces.Box(-1, 1, (len(GLOBAL_CHANNELS), 56, 48), dtype=np.float32),
+            'global_grid': gym.spaces.Box(-np.ones_like(global_high), global_high, dtype=np.float32),
             'player': gym.spaces.Box(-1, 1, (21,), dtype=np.float32),
             'previous_rewards': gym.spaces.Box(-1, 1, (4,), dtype=np.float32),
             'bomb_clock': gym.spaces.Box(0, 1, (1,), dtype=np.float32)})
@@ -160,7 +163,7 @@ class DualGridContract(gym.Env):
         if player is None:
             raise ValueError('player missing')
         # A missing manager must not be mistaken for an empty safe scene.
-        for key in ('bullets', 'enemies', 'items', 'lasers'):
+        for key in ('bullets', 'enemies', 'items', 'lasers', 'player_shots'):
             if raw.get(key) is None:
                 raise ValueError(f'{key} manager unavailable')
         out = {k: np.zeros(s.shape, dtype=np.float32) for k, s in self.observation_space.spaces.items()}
@@ -183,31 +186,53 @@ class DualGridContract(gym.Env):
             active.append(bullet)
         # Maximum coverage is not exact union area for multiple objects in a cell.
         paint_bullets(local, active, origin)
-        bin_entities(active, (0, 1, 2), whole)
-        counts, enemies = bin_entities(raw['enemies'], (3, 4, 5), whole)
+        for channel, frames in enumerate((0, 2, 4)):
+            bin_entities(active, (channel,), whole, frames)
+        counts, enemies = bin_entities(raw['enemies'], (3,), whole)
         known_counts = np.zeros((56, 48), dtype=np.float32)
         for enemy, iy, ix in enemies:
             hp, maximum = enemy.get('hp'), enemy.get('hp_max')
             known = isinstance(hp, int) and isinstance(maximum, int) and 0 <= hp <= maximum <= 10000000 and maximum > 0
             if known:
                 known_counts[iy, ix] += 1
-                whole[6, iy, ix] += hp/maximum
-                whole[8, iy, ix] += maximum/100000
-            whole[9, iy, ix] += bool(enemy.get('is_boss'))
-        whole[6] /= np.maximum(known_counts, 1)
-        whole[8] /= np.maximum(known_counts, 1)
-        whole[7] = known_counts/np.maximum(counts, 1)
-        whole[9] = np.log1p(whole[9])/np.log(17)
-        bin_entities(raw['items'], (10,), whole)
+                whole[4, iy, ix] += hp/100000
+                whole[5, iy, ix] += maximum/100000
+        whole[4] /= np.maximum(known_counts, 1)
+        whole[5] /= np.maximum(known_counts, 1)
+        if len(raw['items']) > MAX_ITEMS:
+            raise ValueError('item count exceeds pinned pool')
+        ordinary_items = []
+        power_counts = np.zeros((56, 48), dtype=np.float64)
+        for item in raw['items']:
+            amount = power_item_raw(item)
+            if not amount:
+                ordinary_items.append(item)
+                continue
+            x, y = pair(item.get('position'), 'power item position') + [192, 0]
+            if 0 <= x < 384 and 0 <= y < 448:
+                power_counts[int(y//8), int(x//8)] += amount
+        whole[11] = power_counts / POWER_GRID_SCALE
+        bin_entities(ordinary_items, (6,), whole)
         px, py = pos+[192, 0]
         if 0 <= px < 384 and 0 <= py < 448:
-            whole[11, int(py//8), int(px//8)] = 1
+            whole[7, int(py//8), int(px//8)] = 1
         for laser in raw['lasers']:
             collision = laser.get('collision')
             if collision is None:
                 raise ValueError('unsupported laser geometry')
             paint_laser(local, 4, 5, collision, origin, 2)
-            paint_laser(whole, 12, 13, collision, np.array([-192, 0]), 8)
+            paint_laser(whole, 8, 9, collision, np.array([-192, 0]), 8)
+        for shot in raw['player_shots']:
+            if shot.get('geometry') != 'th10-player-shot-aabb-v1':
+                raise ValueError('unverified player shot geometry')
+            size = pair(shot.get('hitbox_raw'), 'player shot hitbox')
+            if np.any(size <= 0) or np.any(size > 4096):
+                raise ValueError('invalid player shot hitbox')
+            patch = rectangle(pair(shot['position'], 'player shot position'), size/2,
+                              np.array([-192, 0]), 8, (56, 48))
+            if patch is not None:
+                sl, coverage = patch
+                np.maximum(whole[10][sl], coverage, out=whole[10][sl])
         bomb, spell = raw.get('bomb'), raw.get('spell')
         active_spell = bool(spell and spell['flags_raw'] & 1)
         pv = pair(player['velocity_raw'], 'player velocity')
@@ -222,7 +247,8 @@ class DualGridContract(gym.Env):
         for key, array in out.items():
             if not np.isfinite(array).all():
                 raise ValueError(f'nonfinite {key}')
-            np.clip(array, -1, 1, out=array)
+            space = self.observation_space.spaces[key]
+            np.clip(array, space.low, space.high, out=array)
             if key.endswith('_grid'):
                 # Same values at action sampling and PPO update, with half-size storage.
                 out[key] = array.astype(np.float16).astype(np.float32)

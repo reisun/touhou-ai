@@ -16,10 +16,11 @@ def model_metadata(model, contract, checkpoint, migrated=False, reward_weights=N
         settings[key] = value(1.0) if callable(value) else value
     from touhou_ai.focused_policy import REWARD_KEYS, REWARD_SCALES
     from touhou_ai.dual_grid import CONTRACT as GRID_CONTRACT, SPEC as GRID_SPEC
+    from touhou_ai.live_action_grid import CONTRACT as ACTION_GRID_CONTRACT, SPEC as ACTION_GRID_SPEC
     from touhou_ai.timed_bomb import SPEC as BOMB_SCHEDULE
     from touhou_ai.learning_discount import SPEC as DISCOUNT_CONTRACT
     return {'contract': contract, 'checkpoint': checkpoint, 'migrated': migrated,
-            'bullet_scope': GRID_SPEC if contract == GRID_CONTRACT else BULLET_SCOPE,
+            'bullet_scope': ACTION_GRID_SPEC if contract == ACTION_GRID_CONTRACT else (GRID_SPEC if contract == GRID_CONTRACT else BULLET_SCOPE),
             'reward_input': {'keys': list(REWARD_KEYS), 'scales': REWARD_SCALES.tolist(),
                              'transform': '(value/scale)/(1+abs(value/scale))',
                              'timing': 'previous_completed_action'} if 'previous_rewards' in model.observation_space.spaces else None,

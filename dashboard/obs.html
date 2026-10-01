@@ -1,20 +1,21 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TH10 AI / OBS</title><link rel="stylesheet" href="/obs.css"><script src="/icons.js" defer></script><script src="/obs-status.js" defer></script><script src="/obs.js" defer></script></head>
 <body><main id="overlay">
-<div id="learningBanner" role="status">接続待ち（学習回数未取得）</div>
 <header><strong>TH10 <span>AI OBSERVER</span></strong><small id="status">接続待ち</small></header>
+<div id="learningBanner" role="status">接続待ち（学習回数未取得）</div>
 <div id="obs1" hidden>
 <div class="field-meta"><span id="stage">STAGE —</span><span id="objects">— BULLETS</span></div>
 <div class="observation-key"><span>観測構成を取得中</span><span>—</span></div>
 <canvas id="field" width="384" height="448"></canvas>
 
-<section class="inputs"><h2>AI入力 <small>予測最大 / 実入力</small></h2><div class="input-layout"><div id="directions"></div><div id="buttons"></div></div></section>
-<section class="growth"><h2>成長曲線 <small id="updates">— 更新</small></h2><div class="legend"><span>● 試行報酬</span><span>━ 直近20回平均</span><span class="progress-legend">● 各回の最大到達点</span></div><canvas id="growth" width="498" height="230"></canvas><footer><span id="first">—</span><span id="last">—</span></footer></section>
+<section class="inputs" aria-label="AI入力：予測最大 / 実入力"><div class="input-layout"><div id="directions"></div><div id="buttons"></div></div></section>
+<section class="growth"><div class="legend"><span>● 試行報酬</span><span>━ 直近20回平均</span><span class="progress-legend">▮ 各回の最大到達点</span></div><canvas id="growth" width="498" height="248"></canvas><footer><span id="first">—</span><span id="last">—</span></footer></section>
 </div>
 <div id="obs2" hidden>
-<section><h1>報酬のしくみ</h1><div id="weights"></div></section>
-<section><h2>獲得報酬 <small>直近30秒 / 横幅 |30|</small></h2><div id="totals"></div><div class="sum"><span>合計</span><strong id="sum">—</strong></div></section>
-<section><h2>AIの報酬見込み <strong id="value">—</strong></h2><small>割引将来報酬 V(s)</small><canvas id="values" width="448" height="104"></canvas></section>
-<section><h2>予測とのずれ <strong id="td">—</strong></h2><small>TD誤差 / 30秒平均</small><canvas id="errors" width="448" height="104"></canvas></section>
+<section><h2>報酬項目</h2><div id="weights"></div></section>
+<section><h2>直近獲得量 <small id="rewardScale">直近30秒 / 共通上限 |5|</small></h2><div id="totals"></div></section>
+<section class="reward-chart"><h2>AIの報酬見込み <strong id="value">—</strong></h2><small>割引将来報酬 V(s)</small><canvas id="values" width="448" height="104"></canvas></section>
+<section class="reward-chart"><h2>報酬見込みとのずれ <strong id="td">—</strong></h2><small>TD誤差 / 30秒平均</small><canvas id="errors" width="448" height="104"></canvas></section>
 <footer><span id="window">—</span><span id="samples">観測待ち</span></footer>
+<section class="cumulative"><h2>累積報酬 <strong id="episodeReturn">—</strong></h2></section>
 </div></main></body></html>

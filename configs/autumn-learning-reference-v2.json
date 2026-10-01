@@ -1,0 +1,31 @@
+{
+  "version": "autumn-baseline-v2",
+  "scope": "offline source-derived Autumn Sky only",
+  "reward_death": -60,
+  "action": "independent direction and focus; speed switching enabled; shot/bomb disabled",
+  "representations": {
+    "relative": {
+      "algorithm": "PPO",
+      "gradient_clipping": "global",
+      "reason": "separate clipping showed mixed results across training seeds"
+    },
+    "cnn": {
+      "algorithm": "SeparateClipPPO",
+      "gradient_clipping": "separate_actor_critic",
+      "reason": "stochastic held-out survival improved in all three training seeds; reactive avoidance not established"
+    }
+  },
+  "ppo": {
+    "n_steps": 512,
+    "batch_size": 64,
+    "n_epochs": 3,
+    "learning_rate": 0.0001,
+    "gamma": 0.9995,
+    "gae_lambda": 0.95,
+    "target_kl": 0.02,
+    "ent_coef": 0.01,
+    "max_grad_norm": 0.5
+  },
+  "evidence": "docs/separate-clip-comparison.md",
+  "live_settings_changed": false
+}

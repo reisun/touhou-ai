@@ -9,8 +9,14 @@ param(
     [switch]$Extended,
     [switch]$DualGrid,
     [switch]$DirectML,
+    [switch]$DetailedLogs,
+    [switch]$EvasionOnly,
     [switch]$NoUI,
     [switch]$Continuous,
+    [string]$TransferEvasion,
+    [switch]$UpgradeProgressPower,
+    [ValidateRange(0,5)][int]$ShotStudyGames = 0,
+    [ValidateSet(1.0,0.5)][double]$ShotRewardScale = 1.0,
     [string]$ResumeCheckpoint
 )
 $ErrorActionPreference = 'Stop'
@@ -18,6 +24,15 @@ $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
 $recordPath = Join-Path $root '.runtime/live-learning.json'
 if ($Action -eq 'rehearse') {
+    if ($EvasionOnly -and -not $DualGrid) { throw 'EvasionOnly requires DualGrid' }
+    $profile = Get-Content (Join-Path $root 'configs/sharu-inspired-v1.json') | ConvertFrom-Json
+    $policyChoice = if ($EvasionOnly) { $profile.evasion_policy_overrides } else { $profile.full_policy_overrides }
+    $expectedGridContract = if ($policyChoice.cnn_architecture -eq 'narrow_action_grid') { 'th10-dual-grid-v6-action-grid-v1' } else { 'th10-dual-grid-v6' }
+    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v19' }
+    if ($UpgradeProgressPower) {
+        if ($EvasionOnly -or -not $DualGrid -or -not $ResumeCheckpoint -or $TransferEvasion) { throw 'Power upgrade requires a full dual-grid checkpoint resume' }
+        $expectedReward = 'th10-rewards-v17'
+    }
     # Validate all resume contracts before replacing the active-run record or
     # stopping its observer. Python also checks hash, weights and schedule below.
     if ($ResumeLatest -or $ResumeCheckpoint) {
@@ -31,10 +46,19 @@ if ($Action -eq 'rehearse') {
         }
         if ($resumeStatusPath) {
             $resumeStatus = Get-Content -LiteralPath $resumeStatusPath | ConvertFrom-Json
-            $expectedContract = if ($DualGrid) { 'th10-dual-grid-v2' } elseif ($Extended) { 'th10-focused-bullets-v2' } else { 'th10-live-observed-v1' }
-            if ($resumeStatus.contract -ne $expectedContract -or $resumeStatus.reward_version -ne 'th10-rewards-v11') {
+            $expectedContract = if ($DualGrid) { $expectedGridContract } elseif ($Extended) { 'th10-focused-bullets-v2' } else { 'th10-live-observed-v1' }
+            if ($resumeStatus.contract -ne $expectedContract -or $resumeStatus.reward_version -ne $expectedReward) {
                 throw 'Checkpoint uses an old observation/reward contract; start a new campaign explicitly. Existing run record was preserved.'
             }
+            $profile = Get-Content (Join-Path $root 'configs/sharu-inspired-v1.json') | ConvertFrom-Json
+            $expectedAlgorithm = if ($policyChoice.algorithm) { $policyChoice.algorithm } else { 'PPO' }
+            $expectedCnn = if ($policyChoice.cnn_architecture) { $policyChoice.cnn_architecture } elseif ($DualGrid) { 'dual_grid' } else { 'legacy' }
+            $actualAlgorithm = if ($resumeStatus.algorithm) { $resumeStatus.algorithm } else { 'PPO' }
+            $actualCnn = if ($resumeStatus.cnn_architecture) { $resumeStatus.cnn_architecture } elseif ($resumeStatus.contract -like 'th10-dual-grid*') { 'dual_grid' } else { 'legacy' }
+            if ($expectedAlgorithm -ne $actualAlgorithm -or $expectedCnn -ne $actualCnn) { throw 'Model architecture/algorithm changed; start a fresh campaign. Existing run record was preserved.' }
+            $expectedShare = -not ($policyChoice.share_features_extractor -eq $false)
+            $actualShare = if ($null -eq $resumeStatus.share_features_extractor) { $true } else { $resumeStatus.share_features_extractor }
+            if ($actualShare -ne $expectedShare) { throw 'Feature sharing changed; start a fresh campaign. Existing run record was preserved.' }
             if ($resumeStatus.configured_ppo.gamma -ne 0.9995 -or $resumeStatus.discount_contract.version -ne 'th10-discount-2f-v1') {
                 throw 'Checkpoint uses an old discount contract; start a new campaign explicitly. Existing run record was preserved.'
             }
@@ -53,7 +77,7 @@ if ($Action -eq 'rehearse') {
         }
         if ($candidateStatus) {
             $candidate = Get-Content -LiteralPath $candidateStatus | ConvertFrom-Json
-            if ($candidate.contract -ne 'th10-dual-grid-v2') {
+            if ($candidate.contract -ne $expectedGridContract) {
                 throw 'Dual-grid requires a fresh campaign or a dual-grid checkpoint; existing model was not changed.'
             }
         }
@@ -69,12 +93,23 @@ if ($Action -eq 'rehearse') {
             $process = Get-Process -Id $game.Id -ErrorAction Stop
             if ($process.StartTime.ToUniversalTime().Ticks -ne ([datetime]$game.StartTime).ToUniversalTime().Ticks) { throw 'Managed game PID was reused' }
         }
-        if (-not $NoUI) {
+        # Refresh imported reward/observation contracts for both OBS sources.
+        # NoUI suppresses opening a browser, but an existing viewer still needs refresh.
+        if (Test-Path -LiteralPath (Join-Path $root '.runtime/dashboard.json')) {
+            & (Join-Path $PSScriptRoot 'dashboard.ps1') stop
             & (Join-Path $PSScriptRoot 'dashboard.ps1') start
+        } elseif (-not $NoUI) {
+            & (Join-Path $PSScriptRoot 'dashboard.ps1') start
+        }
+        if (-not $NoUI) {
             $dashboard = Get-Content -LiteralPath (Join-Path $root '.runtime/dashboard.json') | ConvertFrom-Json
             Start-Process "http://127.0.0.1:$($dashboard.Port)/?mode=live"
         }
         $resumeArgs = @()
+        if ($TransferEvasion) {
+            if ($ResumeLatest -or $ResumeCheckpoint -or $EvasionOnly -or -not $DualGrid) { throw "Transfer requires a new full dual-grid campaign" }
+            $resumeArgs = @("--transfer-evasion", $TransferEvasion)
+        }
         if ($ResumeCheckpoint) {
             if ($ResumeLatest) { throw 'Choose ResumeLatest or ResumeCheckpoint, not both' }
             $resumeArgs = @('--resume', $ResumeCheckpoint)
@@ -102,6 +137,10 @@ if ($Action -eq 'rehearse') {
         if ($Extended) { $gameArgs += '--extended' }
         if ($DualGrid) { $gameArgs += '--dual-grid' }
         if ($DirectML) { $gameArgs += '--directml' }
+        if ($EvasionOnly) { $gameArgs += '--evasion-only' }
+        if ($DetailedLogs) { $gameArgs += '--detailed-logs' }
+        if ($UpgradeProgressPower) { $gameArgs += '--upgrade-progress-power' }
+        if ($ShotStudyGames) { $gameArgs += @('--shot-study-games', "$ShotStudyGames", '--shot-reward-scale', $ShotRewardScale.ToString([Globalization.CultureInfo]::InvariantCulture)) }
         if ($ResumePaused) { $gameArgs += '--resume-paused' }
         if ($Continuous) { $gameArgs += '--continuous' }
         & './.venv/Scripts/python.exe' -m touhou_ai.live_learning --output $output --episodes $Episodes --max-steps $MaxSteps --max-seconds $MaxSeconds @resumeArgs @gameArgs

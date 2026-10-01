@@ -33,6 +33,15 @@ class Th10Reader:
 
     def snapshot(self, full=True):
         result = self.globals()
+        result['screen_state_raw'] = self.integer(0x491fb8)
+        stage_manager = self.integer(0x477810)
+        result['stage_manager_raw'] = ({'flags': self.integer(stage_manager + 0x58),
+                                        'timer': self.integer(stage_manager + 0x14)}
+                                       if stage_manager else None)
+        # 0x418201 sets 0x800 during the incoming-stage animation;
+        # 0x41840b..0x418471 clears it at timer 30 and resets the stage clock.
+        result['stage_init_pending'] = (bool(result['stage_manager_raw']['flags'] & 0x800)
+                                        if stage_manager else None)
         result["input_state_raw"] = struct.unpack("<5H", self.block(0x474e30, 10))
         replay = self.integer(0x477838)
         menu = self.integer(0x47784c)
@@ -49,7 +58,7 @@ class Th10Reader:
         gui = self.integer(0x47770c)
         result['dialogue_raw'] = self.integer(gui+0x9eb8) if gui else None
         player = self.integer(0x477834)
-        result.update(player=None, bullets=None, items=None, enemies=None, lasers=None,
+        result.update(player=None, bullets=None, items=None, enemies=None, lasers=None, player_shots=None,
                       stable_entity_ids=False, reward_events_verified=False)
         if player:
             data = self.block(player + 0x3c0, 0x4478-0x3c0)
@@ -59,6 +68,8 @@ class Th10Reader:
                                 "status": struct.unpack_from("<i", data, 0x98)[0],
                                 "invincibility_raw": struct.unpack_from("<i", data, 0x3f50)[0],
                                 "focus_raw": struct.unpack_from("<i", data, 0x40b4)[0]}
+        if full and player:
+            result["player_shots"] = self.player_shots(data)
         if not full:
             return result
         for kind, pointer, start, stride, count, status_offset in (
@@ -125,6 +136,41 @@ class Th10Reader:
                                          "collision": laser_collision(laser_kind, state, position, *geometry)})
                 node = following
         return result
+
+    def player_shots(self, player_data):
+        """Pinned 0x428630 collision owner's 128 runtime rows, not visual sprites.
+
+        player_data begins at player+0x3c0. Descriptor extents are full sizes.
+        State 2 is a hit animation and no longer participates in collisions.
+        Nonzero callbacks need their own geometry validation; never guess them.
+        """
+        shots, descriptors = [], {}
+        for slot in range(128):
+            offset = 0x49c - 0x3c0 + slot * 0x5c
+            state = struct.unpack_from('<i', player_data, offset+0x40)[0]
+            if state in (0, 2):
+                continue
+            if state != 1:
+                raise ValueError('unsupported player shot state')
+            address = struct.unpack_from('<I', player_data, offset+0x58)[0]
+            if address not in descriptors:
+                descriptors[address] = self.block(address, 0x34)
+            descriptor = descriptors[address]
+            if struct.unpack_from('<I', descriptor, 0x30)[0]:
+                raise ValueError('unsupported player shot collision callback')
+            position = self.floats(player_data, offset+0x14, 2)
+            size = self.floats(descriptor, 0xc, 2)
+            if any(v <= 0 or v > 4096 for v in size):
+                raise ValueError('invalid player shot hitbox')
+            kind = descriptor[0x1d]
+            # The native owner skips ordinary shots crossing the top edge.
+            if kind != 3 and position[1] - size[1]/2 < 0:
+                continue
+            shots.append({'slot': slot, 'state': state, 'position': position,
+                'velocity_raw': self.floats(player_data, offset+0x20, 2),
+                'hitbox_raw': size, 'type': kind,
+                'geometry': 'th10-player-shot-aabb-v1'})
+        return shots
 
     def add_acceleration(self, state, manager):
         """Backward velocity difference in pixels/frame^2, not scripted future acceleration."""

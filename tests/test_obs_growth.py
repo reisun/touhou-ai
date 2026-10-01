@@ -3,11 +3,52 @@ from pathlib import Path
 import tempfile
 import unittest
 from touhou_ai.obs_stats import ObsStats
-from touhou_ai.live_rewards import VERSION
+from touhou_ai.live_rewards import VERSION, LiveRewards
 from touhou_ai.bullet_scope import SPEC
 
 
 class GrowthProgressTests(unittest.TestCase):
+    def test_explicit_reward_transition_keeps_resumed_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory); root = base/'artifacts'; root.mkdir()
+            (base/'.runtime').mkdir()
+            previous = None
+            for index, version in enumerate(('v17', 'v17', 'v18', 'v18')):
+                run = root/f'live-learning-{index}'; run.mkdir()
+                weights = {'progress_power': .1 if version == 'v18' else 2/60}
+                status = dict(backend='real_th10', contract='same', reward_version=version,
+                    reward_weights=weights, episodes=[dict(episode=1, reload_verified=True,
+                    max_progress={'rank': 4}, **{'return': index})])
+                if previous:
+                    status['resumed_from'] = str(previous/'model.zip')
+                if index == 2:
+                    status['reward_transition'] = dict(**{'from':'v17','to':'v18'},
+                        old_weights={'progress_power':2/60}, new_weights=weights,
+                        policy_optimizer_rng_preserved=True)
+                (run/'status.json').write_text(json.dumps(status))
+                previous = run
+            (base/'.runtime/live-learning.json').write_text(json.dumps({'RunId': run.name}))
+            self.assertEqual(len(ObsStats(root).snapshot()['growth']), 4)
+            boundary = root/'live-learning-2/status.json'
+            status = json.loads(boundary.read_text()); del status['reward_transition']
+            boundary.write_text(json.dumps(status))
+            self.assertEqual(len(ObsStats(root).snapshot()['growth']), 2)
+
+    def test_bomb_progress_has_zero_reward_but_records_obs1_rank(self):
+        event = dict(id='bomb-boss', kind='progress', confirmed=True,
+                     source='verified_ecl_progress_v1', stage=2, milestone='boss_defeat',
+                     lives_raw=2, power_raw=100, bomb_state=1)
+        rewards = LiveRewards()
+        rewards.reset('episode')
+        total, parts = rewards.calculate('episode', [event])
+        self.assertEqual(total, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)/'live-learning-bomb'
+            run.mkdir()
+            row = dict(telemetry=dict(episode_id=run.name+'-1'), events=[event], rewards=parts)
+            (run/'episode-1.jsonl').write_text(json.dumps(row)+'\n')
+            self.assertEqual(ObsStats(run.parent).episode_progress(run, 1)['rank'], 8)
+
     def test_run_episode_join_missing_and_non_cumulative_maximum(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

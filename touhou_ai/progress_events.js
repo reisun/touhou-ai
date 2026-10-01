@@ -13,7 +13,7 @@ function progressContext() {
     const replay = ptr(0x477838).readPointer(), stage = ptr(0x474c7c).readS32();
     return enabled && stage >= 1 && stage <= 6 && ptr(0x474c74).readS32() === 1
         && ptr(0x474c68).readS32() === 0 && ptr(0x474c6c).readS32() === 1
-        && ptr(0x474ca0).readS32() === 0 && !replay.isNull() && replay.add(0x10).readS32() === 0;
+        && [0, 4].includes(ptr(0x474ca0).readS32()) && !replay.isNull() && replay.add(0x10).readS32() === 0;
 }
 function instructionSub(owner, instruction) {
     const db = owner.add(0x102c).readPointer(), count = db.add(8).readU32();
@@ -29,15 +29,19 @@ function instructionSub(owner, instruction) {
     if (nearest.add(4).readPointer().readU32() !== 0x484c4345) throw new Error('invalid ECLH');
     return eclName(nearest.readPointer());
 }
-function addProgress(owner, milestone, evidence) {
+function addProgress(owner, milestone, evidence, spellId=null) {
     if (progressEvents.length >= 64) throw new Error('progress event overflow');
     const lives = ptr(0x474c70).readS32(), power = ptr(0x474c48).readS32();
     if (lives < 0) return; // No progress bonus after game over.
     if (lives > 8 || power < 0 || power > 100) throw new Error('invalid progress event state');
+    const bomb = ptr(0x4776ec).readPointer();
+    const bombState = bomb.isNull() ? null : bomb.add(0x28).readS32();
+    if (bombState !== 0 && bombState !== 1) throw new Error('unknown event-time bomb state');
     progressEvents.push({id: combatSession + ':p:' + (++combatSequence), kind: 'progress',
-        confirmed: true, source: 'verified_ecl_progress_v1', milestone,
+        confirmed: true, source: 'verified_ecl_progress_v2', milestone,
+        difficulty_raw: 1, spell_id_raw: spellId,
         stage: ptr(0x474c7c).readS32(), frame: ptr(0x474c88).readS32(), gate_tick: tick,
-        enemy_id: enemyIdentity(owner).id, lives_raw: lives, power_raw: power, evidence});
+        enemy_id: enemyIdentity(owner).id, lives_raw: lives, power_raw: power, bomb_state: bombState, evidence});
 }
 hooks.push(Interceptor.attach(ptr(0x40e770), {
     onEnter() {
@@ -70,14 +74,32 @@ hooks.push(Interceptor.attach(ptr(0x4127a0), {
             if (!identity || !identity.progressRole || !progressContext()
                     || identity.progressStage !== ptr(0x474c7c).readS32()) return;
             this.role = identity.progressRole; this.stage = identity.progressStage;
+            this.identity = identity;
+            const spell = ptr(0x4776f4).readPointer();
+            this.spell = null;
+            if (!spell.isNull() && (spell.add(0x378c).readU32() & 1)) {
+                const id = spell.add(0x3788).readS32();
+                this.spell = NORMAL_SPELL_PROGRESS.find(s => s.id === id && s.stage === this.stage && s.role === this.role) || null;
+            }
             this.hp = this.owner.add(0x23fc).readS32(); this.observe = true;
         } catch (error) { progressFailure = String(error); }
     },
     onLeave(value) {
         if (!this.observe || value.isNull()) return;
         try {
+            if (!progressContext() || this.stage !== ptr(0x474c7c).readS32()) return;
             const flags = this.owner.add(0x2480).readU32(), hp = this.owner.add(0x23fc).readS32();
             const name = eclName(value);
+            const timeout = !!(flags & 0x10000), spell = this.spell;
+            if (spell && name === spell.callback && hp === spell.hp && (timeout || this.hp <= spell.hp)) {
+                const completed = this.identity.completedSpells || (this.identity.completedSpells = new Set());
+                if (completed.has(spell.id)) return;
+                addProgress(this.owner, spell.final ? this.role + '_defeat' : 'spell_breakthrough',
+                    {instruction: '4127a0', callback: name, flags, hp_before: this.hp, hp_after: hp,
+                     timeout, spell_id_raw: spell.id, final_spell: spell.final}, spell.id);
+                completed.add(spell.id);
+                return;
+            }
             const final = this.role === 'boss' ? 'BossDead' : this.stage === 5 ? 'MBossEscape' : 'MBossDead';
             if (name !== final || (flags & 0x10000) || this.hp > 0 || hp !== 0) return;
             addProgress(this.owner, this.role + '_defeat',

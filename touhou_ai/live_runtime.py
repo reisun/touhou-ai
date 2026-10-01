@@ -39,6 +39,8 @@ class LiveRuntime:
             self.lease = ProcessLease(pid)
             self.session = frida.attach(pid)
             source = Path(__file__).with_name("th10_gate.js").read_text()
+            spell_rows = json.loads(Path(__file__).with_name('spell_progress.json').read_text())
+            source += '\nconst NORMAL_SPELL_PROGRESS = ' + json.dumps(spell_rows) + ';\n'
             source += '\n' + Path(__file__).with_name('progress_events.js').read_text(encoding='utf-8')
             if diagnostic_script is not None:
                 source += '\n' + Path(diagnostic_script).read_text(encoding='utf-8')
@@ -72,7 +74,9 @@ class LiveRuntime:
         status = self.api.status()
         if not status["enabled"] or not status["parked"] or status["tick"] != self.park["tick"]:
             raise RuntimeError("game not held at expected frame")
+        reader_started = time.perf_counter()
         result = self.reader.snapshot(full)
+        reader_ms = (time.perf_counter()-reader_started)*1000
         combat = self.api.combat()
         if combat['error']:
             raise RuntimeError('combat observation failed: ' + combat['error'])
@@ -86,29 +90,53 @@ class LiveRuntime:
         if not after["parked"] or not after["enabled"] or after["tick"] != status["tick"]:
             raise RuntimeError("snapshot lease lost")
         return result | {"gate_tick": status["tick"], "frame_locked": True,
-                         "input_calls": after["input_calls"]}
+                         "input_calls": after["input_calls"], "snapshot_full": full,
+                         "reader_snapshot_ms": reader_ms}
+
+    def owns_full_snapshot(self, state):
+        if (state.get('snapshot_full') is not True or state.get('frame_locked') is not True
+                or state.get('gate_tick') != self.park['tick']):
+            return False
+        status = self.api.status()
+        return (status['enabled'] and status['parked']
+                and status['tick'] == state['gate_tick'])
 
     def step(self, mask=0, frames=2, full=True, gameplay_guard=False):
         if (type(mask) is not int or mask < 0 or mask & ~0xff
                 or type(frames) is not int or not 1 <= frames <= 120):
             raise ValueError("invalid frame action")
         start = self.park["tick"]
+        advance_started = time.perf_counter()
         self.api.step(start, frames, mask, gameplay_guard)
         self.park = self._wait()
         if self.park["tick"] != start+frames:
             raise RuntimeError("frame gate skipped updates")
-        return self.snapshot(full)
+        advance_ms = (time.perf_counter()-advance_started)*1000
+        snapshot_started = time.perf_counter()
+        state = self.snapshot(full)
+        state["runtime_timing_ms"] = {"advance_wait_ms": advance_ms,
+            "snapshot_ms": (time.perf_counter()-snapshot_started)*1000,
+            "reader_snapshot_ms": state['reader_snapshot_ms']}
+        return state
 
     def step_gameplay(self, mask=0, frames=2, full=True):
+        guard_started = time.perf_counter()
         before = self.snapshot(full=False)
-        if before["replay_mode"] != 0 or before["mode_flags"] != 0 or before["player"] is None:
+        guard_ms = (time.perf_counter()-guard_started)*1000
+        if (before["replay_mode"] != 0 or before["mode_flags"] not in (0, 4) or before["player"] is None
+                or before.get('stage_init_pending', False) is not False):
             raise RuntimeError("not normal live gameplay")
         state = self.step(mask, frames, full, gameplay_guard=True)
+        state.setdefault("runtime_timing_ms", {})["guard_snapshot_ms"] = guard_ms
         if (state["stage"] != before["stage"] or state["player"] is None
                 or state["lives_raw"] < 0):
             state["transition"] = "terminal_or_stage_change"
         elif state["stage_frame"]-before["stage_frame"] != frames:
-            raise RuntimeError("gameplay frame mismatch (pause/loading/stall)")
+            keys = ('stage', 'stage_frame', 'mode_flags', 'screen_state_raw',
+                    'pause_words', 'stage_init_pending', 'stage_manager_raw')
+            detail = {name: {key: value.get(key) for key in keys}
+                      for name, value in [('before', before), ('after', state)]}
+            raise RuntimeError(f"gameplay frame mismatch (pause/loading/stall): {detail}")
         else:
             state["transition"] = "gameplay"
         return state
@@ -152,7 +180,7 @@ def main():
                 print(json.dumps({"reset": status["reset"]}))
             if args.movement_test:
                 before = runtime.snapshot(full=False)
-                if before["player"] is None or before["replay_mode"] != 0 or before["mode_flags"] != 0:
+                if before["player"] is None or before["replay_mode"] != 0 or before["mode_flags"] not in (0, 4):
                     raise ValueError("movement test requires normal live gameplay")
                 for mask in (0x80, 0x40, 0x04, 0x01, 0):
                     after = runtime.step_gameplay(mask, 10, full=False)
@@ -175,11 +203,8 @@ def main():
                 state["sample_ms"] = (time.perf_counter()-start)*1000
                 stream.write(json.dumps(state, allow_nan=False)+"\n")
                 stream.flush()
-                latest = Path("artifacts/telemetry/latest.json")
-                latest.parent.mkdir(parents=True, exist_ok=True)
-                temporary = latest.with_suffix(".tmp")
-                temporary.write_text(json.dumps(packet(state, args.output.stem, "live"), allow_nan=False), encoding="utf-8")
-                temporary.replace(latest)
+                from touhou_ai.telemetry_memory import publish
+                publish(packet(state, args.output.stem, "live"))
                 if args.start and state.get("transition") == "terminal_or_stage_change":
                     terminal = state["lives_raw"] < 0
                     if not terminal:

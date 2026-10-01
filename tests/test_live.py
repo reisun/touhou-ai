@@ -10,6 +10,8 @@ class Memory:
     def __init__(self):
         self.regions = {0x474c48: bytearray(0x5c)}
         self.regions[0x474e30] = bytearray(10)
+        self.regions[0x491fb8] = bytearray(struct.pack('<I', 7))
+        self.regions[0x477810] = bytearray(4)
         for pointer in (0x47770c, 0x4776ec, 0x4776f4, 0x477830, 0x477834, 0x477838, 0x47784c, 0x4776f0, 0x477818, 0x477704, 0x47781c):
             self.regions[pointer] = bytearray(4)
 
@@ -26,6 +28,19 @@ class Memory:
 
 
 class ReaderTests(unittest.TestCase):
+    def test_stage_manager_initialization_flag_and_missing_manager(self):
+        memory = Memory()
+        self.assertIsNone(Th10Reader(memory).snapshot()['stage_init_pending'])
+        memory.put_pointer(0x477810, 0x3000000)
+        manager = bytearray(0x60)
+        memory.regions[0x3000000] = manager
+        struct.pack_into('<I', manager, 0x14, 29)
+        struct.pack_into('<I', manager, 0x58, 0x800)
+        raw = Th10Reader(memory).snapshot()
+        self.assertEqual(raw['stage_manager_raw'], dict(flags=0x800, timer=29))
+        self.assertTrue(raw['stage_init_pending'])
+        struct.pack_into('<I', manager, 0x58, 0)
+        self.assertFalse(Th10Reader(memory).snapshot()['stage_init_pending'])
     def test_unavailable_not_empty(self):
         state = Th10Reader(Memory()).snapshot()
         self.assertIsNone(state["player"])
@@ -75,6 +90,39 @@ def gameplay():
 
 
 class ResetTests(unittest.TestCase):
+    def test_later_stage_game_over_returns_title_and_starts_stage_one(self):
+        for stage in range(2, 7):
+            for selection in range(3):
+                initial = self.game_over(selection) | {'stage': stage}
+                class Fake:
+                    def __init__(self):
+                        self.current = initial
+                        self.commands = []
+                        self.title_selected = False
+                    def snapshot(self, full=False):
+                        return self.current
+                    def step(self, mask, frames, full=False):
+                        self.commands.append(mask)
+                        if self.current.get('lives_raw') == -1:
+                            if mask == 0x20:
+                                self.current['pause_words'][9] += 1
+                            elif mask == 1:
+                                assert self.current['pause_words'][9] == 2
+                                self.title_selected = True
+                                self.current = menu(2)
+                        elif mask == 1:
+                            screen = self.current['menu_words'][7]
+                            self.current = {2: menu(6, selection=1, count=4),
+                                            6: menu(7, selection=0, count=2),
+                                            7: menu(8, selection=1, count=3),
+                                            8: gameplay()}[screen]
+                        return self.current
+                runtime = Fake()
+                result = continue_episode(runtime)
+                self.assertTrue(runtime.title_selected)
+                verify_episode(result, 1)
+                self.assertEqual(runtime.commands.count(0x20), 2-selection)
+
     def game_over(self, selection=2):
         words = [2, 8, 0, 0, 100, 101, 0, 0, 1, selection, selection, 3]
         return gameplay() | {"lives_raw": -1, "stage_frame": 2000,
@@ -184,6 +232,15 @@ class ResetTests(unittest.TestCase):
 
 
 class FrameTests(unittest.TestCase):
+    def test_initializing_stage_never_receives_policy_input(self):
+        from touhou_ai.live_runtime import LiveRuntime
+        class Fake:
+            snapshot = lambda self, full=False: gameplay() | {'stage_init_pending': True}
+            def step(self, *args, **kwargs):
+                raise AssertionError('must not send gameplay input during initialization')
+        with self.assertRaisesRegex(RuntimeError, 'not normal live gameplay'):
+            LiveRuntime.step_gameplay(Fake())
+
     def test_action_mapping_and_validation(self):
         from touhou_ai.live_runtime import input_mask
         self.assertEqual(input_mask([2, 1, 1, 1]), 0x97)

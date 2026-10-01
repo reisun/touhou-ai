@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.logger import configure
+from touhou_ai.checkpoint_rng import load_preserving_rng, capture_rng, restore_rng
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,7 +41,10 @@ def worker(directory, device=None):
         import torch_directml
         device = torch_directml.device()
     torch.distributions.Categorical.log_prob = compatible_log_prob
-    model = PPO.load(directory / 'before.zip', device='cpu')
+    from touhou_ai.live_model import algorithm_class
+    request = directory / 'algorithm.json'
+    name = json.loads(request.read_text(encoding='utf-8'))['algorithm'] if request.exists() else 'PPO'
+    model = load_preserving_rng(algorithm_class(name), directory / 'before.zip', device='cpu')
     move_policy(model, device)
     with np.load(directory / 'rollout.npz', allow_pickle=False) as data:
         n = len(data['actions'])
@@ -54,8 +58,15 @@ def worker(directory, device=None):
     buffer.pos = n
     model.rollout_buffer = buffer
     model.set_logger(configure(str(directory), ['json']))
+    rng_request = directory / 'rng-before.json'
+    if rng_request.exists():
+        restore_rng(json.loads(rng_request.read_text(encoding='utf-8')))
+    else:
+        # Compatibility with an already-running collector from before this fix.
+        np.random.seed(model.seed)
     started = time.monotonic()
     model.train()
+    rng_after = capture_rng()
     move_policy(model, torch.device('cpu'))
     seconds = time.monotonic() - started
     if not all(torch.isfinite(p).all() for p in model.policy.parameters()):
@@ -66,7 +77,23 @@ def worker(directory, device=None):
     model.save(directory / 'after.zip')
     (directory / 'result.json').write_text(json.dumps({'update_seconds': seconds, 'metrics': metrics,
         'gamma': model.gamma, 'gae_lambda': model.gae_lambda,
-        'buffer_gamma': buffer.gamma, 'buffer_gae_lambda': buffer.gae_lambda}), encoding='utf-8')
+        'buffer_gamma': buffer.gamma, 'buffer_gae_lambda': buffer.gae_lambda,
+        'rng_after': rng_after}), encoding='utf-8')
+
+
+def validate_update_metadata(model, candidate):
+    if type(candidate) is not type(model):
+        raise ValueError('GPU update changed learning algorithm')
+    if candidate.num_timesteps != model.num_timesteps:
+        raise ValueError('GPU update timestep mismatch')
+    if candidate.n_epochs != model.n_epochs or candidate.target_kl != model.target_kl:
+        raise ValueError('GPU update changed epoch/KL settings')
+    completed = candidate._n_updates - model._n_updates
+    if not 1 <= completed <= model.n_epochs:
+        raise ValueError('GPU update epoch count outside budget')
+    if model.target_kl is None and completed != model.n_epochs:
+        raise ValueError('GPU update stopped without KL limit')
+    return completed
 
 
 def update(model, buffer, directory, timeout=180):
@@ -74,6 +101,11 @@ def update(model, buffer, directory, timeout=180):
     directory.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
     try:
+        from touhou_ai.live_model import algorithm_class
+        name = type(model).__name__
+        algorithm = algorithm_class(name)
+        (directory / 'algorithm.json').write_text(json.dumps({'algorithm': name}), encoding='utf-8')
+        (directory / 'rng-before.json').write_text(json.dumps(capture_rng()), encoding='utf-8')
         # Close even if serialization fails (e.g. an unpicklable diagnostic mock).
         with (directory / 'before.zip').open('wb') as stream:
             model.save(stream)
@@ -87,19 +119,23 @@ def update(model, buffer, directory, timeout=180):
             subprocess.run([str(python), '-m', 'touhou_ai.directml_update', str(directory.resolve())],
                            cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=timeout,
                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        candidate = PPO.load(directory / 'after.zip', device='cpu')
+        candidate = load_preserving_rng(algorithm, directory / 'after.zip', device='cpu')
         if candidate.gamma != model.gamma or candidate.gae_lambda != model.gae_lambda:
             raise ValueError('GPU update changed discount/GAE contract')
-        if candidate.num_timesteps != model.num_timesteps or candidate._n_updates != model._n_updates + model.n_epochs:
-            raise ValueError('GPU update metadata mismatch')
+        completed_epochs = validate_update_metadata(model, candidate)
         old, new = model.policy.state_dict(), candidate.policy.state_dict()
         if not all(torch.isfinite(v).all() for v in new.values()) or all(torch.equal(v, new[k]) for k, v in old.items()):
             raise ValueError('invalid or unchanged GPU parameters')
         info = json.loads((directory / 'result.json').read_text(encoding='utf-8'))
+        if 'rng_after' not in info:
+            raise ValueError('GPU worker did not preserve training RNG continuity')
         candidate.set_logger(model.logger)
         for key, value in info['metrics'].items():
             candidate.logger.record(key, value)
-        return candidate, {'backend': 'directml', 'worker_update_seconds': info['update_seconds'],
+        restore_rng(info['rng_after'])
+        return candidate, {'backend': 'directml', 'completed_epochs': completed_epochs,
+                           'kl_early_stopped': completed_epochs < model.n_epochs,
+                           'worker_update_seconds': info['update_seconds'],
                            'total_seconds': time.monotonic() - started}
     except Exception as error:
         # Worker cannot mutate parent policy, optimizer, or rollout arrays.

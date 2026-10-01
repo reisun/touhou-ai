@@ -1,0 +1,37 @@
+{
+  "version": "autumn-baseline-v4",
+  "scope": "offline source-derived Autumn Sky only",
+  "reward_death": -1,
+  "training_environment_initial_seed": 7,
+  "action": "independent direction and focus; speed switching enabled; shot/bomb disabled",
+  "representations": {
+    "relative": {
+      "reward_death": -60,
+      "algorithm": "PPO",
+      "gradient_clipping": "global",
+      "reason": "separate clipping showed mixed results across training seeds"
+    },
+    "cnn": {
+      "algorithm": "SeparateClipPPO",
+      "gradient_clipping": "separate_actor_critic",
+      "observation": "action_grid",
+      "observation_contract": "dual_grid_plus_fast_slow_2f_16f_v1",
+      "initialization": "matched baseline tensors; zero added merge connections; baseline RNG restored",
+      "reason": "user adopted spatial action-risk input and death reward -1; reward-scale trial improved completion in all three seeds and removed critic saturation; reactive avoidance remains weak",
+      "limitations": "bullet-only; constant observed velocity; 2F move then stop for the 16F forecast"
+    }
+  },
+  "ppo": {
+    "n_steps": 512,
+    "batch_size": 64,
+    "n_epochs": 3,
+    "learning_rate": 0.0001,
+    "gamma": 0.9995,
+    "gae_lambda": 0.95,
+    "target_kl": 0.02,
+    "ent_coef": 0.01,
+    "max_grad_norm": 0.5
+  },
+  "evidence": ["docs/separate-clip-comparison.md", "docs/spatial-input-candidates.md", "docs/risk-refinements-20260929.md"],
+  "live_settings_changed": false
+}

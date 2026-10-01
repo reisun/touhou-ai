@@ -1,4 +1,7 @@
 """Bounded on-policy learning from the real game; staged, explicitly partial contract."""
+from touhou_ai.motion_jitter import MotionJitter
+from contextlib import nullcontext
+from touhou_ai.ui_stats import UiStats
 import argparse
 import hashlib
 import json
@@ -46,12 +49,8 @@ def atomic_json(path, data):
 
 
 def publish_telemetry(data):
-    # A read-only viewer cannot invalidate the learning trajectory if its file is busy.
-    try:
-        atomic_json(ROOT / "artifacts/telemetry/latest.json", data)
-        return True
-    except OSError:
-        return False
+    from touhou_ai.telemetry_memory import publish
+    return publish(data, ROOT / 'artifacts')
 
 
 class ObservedContract(gym.Env):
@@ -157,13 +156,13 @@ class FocusedObservedContract(ExtendedObservedContract):
 def hit_events(before, after, allow_stage_transition=False):
     stages = (before['stage'], before['stage']+1) if allow_stage_transition else (before['stage'],)
     if (after["stage"] not in stages or after['stage'] not in range(1, 7)
-            or after["replay_mode"] != 0 or after["mode_flags"] != 0):
+            or after["replay_mode"] != 0 or after["mode_flags"] not in (0, 4)):
         raise ValueError("unvalidated stage/menu transition")
     difference = before["lives_raw"]-after["lives_raw"]
-    if difference not in (0, 1):
+    if difference not in (-1, 0, 1):
         raise ValueError("unexpected life change; do not infer a reward")
     return ([{"id": f"life-loss:{after['stage']}:{after['stage_frame']}", "kind": "hit", "confirmed": True}]
-            if difference else [])
+            if difference == 1 else [])
 
 
 def fingerprint(model):
@@ -181,7 +180,8 @@ def resume_manifest(checkpoint, extended=False, dual_grid=False):
     manifest = json.loads((checkpoint.parent / "status.json").read_text(encoding="utf-8"))
     from touhou_ai.focused_policy import CONTRACT as FOCUSED_CONTRACT
     from touhou_ai.dual_grid import CONTRACT as GRID_CONTRACT
-    accepted = (GRID_CONTRACT,) if dual_grid else ((FOCUSED_CONTRACT,) if extended else (CONTRACT,))
+    from touhou_ai.live_action_grid import CONTRACT as ACTION_GRID_CONTRACT
+    accepted = (GRID_CONTRACT,ACTION_GRID_CONTRACT) if dual_grid else ((FOCUSED_CONTRACT,) if extended else (CONTRACT,))
     if manifest.get("backend") != "real_th10" or manifest.get("contract") not in accepted:
         raise ValueError("not a compatible real-game checkpoint")
     matches = [e for e in manifest["episodes"] if e["checkpoint"] == checkpoint.name]
@@ -242,46 +242,91 @@ def game_command(action, recovery=False):
     print(result.stdout.strip(), flush=True)
 
 
-def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, continue_managed=False, extended=False, resume_paused=False, continuous=False, dual_grid=False, directml=False):
+def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, continue_managed=False, extended=False, resume_paused=False, continuous=False, dual_grid=False, directml=False, detailed_logs=False, evasion_only=False, transfer_evasion=None, upgrade_progress_power=False, shot_study_games=0, shot_reward_scale=1.):
     from touhou_ai.live_features import EXTENDED_CONTRACT, bomb_events
     from touhou_ai.focused_policy import CONTRACT as FOCUSED_CONTRACT, FocusedFeatures
     from touhou_ai.dual_grid import (CONTRACT as GRID_CONTRACT, SPEC as GRID_SPEC,
                                     DualGridContract, DualGridFeatures, GridRolloutBuffer)
+    from touhou_ai.live_rewards import VERSION as REWARD_VERSION, WEIGHTS as REWARD_WEIGHTS, ENABLED as REWARD_ENABLED
+    from touhou_ai.evasion_only import EvasionPolicy, DeathOnlyRewards, ACTION_CONTRACT
+    if evasion_only:
+        if not dual_grid:
+            raise ValueError('evasion-only requires dual-grid')
+        from touhou_ai.evasion_only import VERSION as REWARD_VERSION, WEIGHTS as REWARD_WEIGHTS, ENABLED as REWARD_ENABLED
     extended = extended or dual_grid
     if directml and not dual_grid:
         raise ValueError('DirectML updates require the tested dual-grid policy')
     directml_enabled = directml
-    contract_id = GRID_CONTRACT if dual_grid else (FOCUSED_CONTRACT if extended else CONTRACT)
-    observation_scope = GRID_SPEC if dual_grid else BULLET_SCOPE
+    profile = json.loads((ROOT / "configs/sharu-inspired-v1.json").read_text(encoding="utf-8"))
+    from touhou_ai.live_model import model_config, algorithm_class
+    selection = model_config(profile, evasion_only, dual_grid)
+    action_grid = selection['cnn_architecture'] == 'narrow_action_grid'
+    from touhou_ai.live_action_grid import (CONTRACT as ACTION_GRID_CONTRACT, SPEC as ACTION_GRID_SPEC,
+                                           LiveActionGridContract, build_live_action_model)
+    contract_id = ACTION_GRID_CONTRACT if action_grid else (GRID_CONTRACT if dual_grid else (FOCUSED_CONTRACT if extended else CONTRACT))
+    observation_scope = ACTION_GRID_SPEC if action_grid else (GRID_SPEC if dual_grid else BULLET_SCOPE)
     if resume_paused and not continue_managed:
         raise ValueError('resume-paused requires continue-managed')
     if not 1 <= episodes <= 5 or not 32 <= max_steps <= (18000 if continuous else 2400) or not 30 <= max_seconds <= 900:
         raise ValueError("bounded rehearsal budgets required")
     prior = resume_manifest(resume, extended, dual_grid) if resume is not None else None
-    if prior and prior[0].get('reward_version') != REWARD_VERSION:
+    if upgrade_progress_power:
+        from touhou_ai.live_rewards import validate_power_upgrade
+        if not prior or evasion_only or transfer_evasion or not dual_grid:
+            raise ValueError('Power upgrade requires a full dual-grid resume')
+        validate_power_upgrade(prior[0])
+    if prior and not upgrade_progress_power and prior[0].get('reward_version') != REWARD_VERSION:
         raise ValueError('old reward checkpoint cannot resume the reset learning campaign')
     if prior and prior[0].get('bullet_scope') != observation_scope:
         raise ValueError('checkpoint bullet observation scope differs')
-    if prior and extended and prior[0].get('reward_weights') != REWARD_WEIGHTS:
+    if prior and extended and not upgrade_progress_power and prior[0].get('reward_weights') != REWARD_WEIGHTS:
         raise ValueError('reward weights changed; explicit new campaign required')
+    if shot_study_games:
+        if (not 1 <= shot_study_games <= 5 or shot_reward_scale not in (1., .5)
+                or not prior or not dual_grid or evasion_only or not continuous or upgrade_progress_power):
+            raise ValueError('shot study requires 1-5 full continuous games from the standard checkpoint')
+        REWARD_WEIGHTS = dict(REWARD_WEIGHTS, damage=REWARD_WEIGHTS['damage']*shot_reward_scale)
+        if shot_reward_scale != 1.:
+            REWARD_VERSION += '-shot-half-study'
+    elif shot_reward_scale != 1.:
+        raise ValueError('shot scaling requires a bounded study')
     if prior and extended and prior[0].get('bomb_schedule') != BOMB_SCHEDULE:
         raise ValueError('bomb schedule changed; explicit new campaign required')
-    profile = json.loads((ROOT / "configs/sharu-inspired-v1.json").read_text(encoding="utf-8"))
-    settings = profile['provisional_ppo']
+    settings = dict(profile['provisional_ppo'])
+    if evasion_only or dual_grid:
+        settings.update(profile.get('evasion_ppo_overrides' if evasion_only else 'full_ppo_overrides', {}))
+    if prior and prior[0].get('configured_ppo') != settings:
+        raise ValueError('PPO settings changed; start a fresh campaign')
+    policy_overrides = profile.get('evasion_policy_overrides' if evasion_only else 'full_policy_overrides', {})
+    if not evasion_only and not dual_grid:
+        policy_overrides = {}
+    share_features = policy_overrides.get('share_features_extractor', True)
+    from touhou_ai.live_model import model_config, algorithm_class
+    selection = model_config(profile, evasion_only, dual_grid, prior[0] if prior else None)
+    algorithm = algorithm_class(selection['algorithm'])
+    from touhou_ai.narrow_grid import NarrowGridFeatures
+    grid_features = NarrowGridFeatures if selection['cnn_architecture'] == 'narrow_grid' else DualGridFeatures
+    if prior and prior[0].get('share_features_extractor', True) != share_features:
+        raise ValueError('Feature sharing changed; start a fresh campaign')
     verify_settings(settings, prior[0] if prior else None)
     output.mkdir(parents=True, exist_ok=False)
     torch.set_num_threads(1)
-    contract = DualGridContract() if dual_grid else (FocusedObservedContract() if extended else ObservedContract())
-    model = PPO(TimedBombPolicy if extended else "MultiInputPolicy", contract, device="cpu", **settings,
+    contract = LiveActionGridContract() if action_grid else (DualGridContract() if dual_grid else (FocusedObservedContract() if extended else ObservedContract()))
+    model = build_live_action_model(settings, evasion_only=evasion_only) if action_grid else algorithm(EvasionPolicy if evasion_only else (TimedBombPolicy if extended else "MultiInputPolicy"), contract, device="cpu", **settings,
                 rollout_buffer_class=GridRolloutBuffer if dual_grid else DictRolloutBuffer,
-                policy_kwargs={"features_extractor_class": DualGridFeatures if dual_grid else (FocusedFeatures if extended else NumericalFeatures),
+                policy_kwargs={"share_features_extractor": share_features, "features_extractor_class": grid_features if dual_grid else (FocusedFeatures if extended else NumericalFeatures),
                                "net_arch": {"pi": [256, 128] if extended else [128, 128],
                                             "vf": [256, 128] if extended else [128, 128]}})
     if prior is not None:
         if prior[0]['contract'] != contract_id:
-            model = migrate_extended(PPO.load(resume, device='cpu'), model)
+            from touhou_ai.checkpoint_rng import load_preserving_rng
+            model = migrate_extended(load_preserving_rng(PPO, resume, device='cpu'), model)
         else:
-            model = PPO.load(resume, env=contract, device="cpu")
+            from touhou_ai.checkpoint_rng import load_preserving_rng
+            model = load_preserving_rng(algorithm, resume, env=contract, device="cpu")
+        if getattr(model, 'collector_rng_state', None) is not None:
+            from touhou_ai.checkpoint_rng import restore_rng
+            restore_rng(model.collector_rng_state)
         if model.num_timesteps != prior[1]["total_steps"]:
             raise ValueError("checkpoint timestep metadata mismatch")
         for key, value in settings.items():
@@ -290,6 +335,19 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                 actual = actual(1.0)
             if actual != value:
                 raise ValueError(f"resume PPO configuration differs: {key}")
+    transfer_info = None
+    if transfer_evasion is not None:
+        if resume is not None or evasion_only or not action_grid:
+            raise ValueError('Transfer requires a new full action-grid campaign')
+        source_manifest, source_episode = resume_manifest(transfer_evasion, True, True)
+        if source_manifest.get('bullet_scope') != observation_scope:
+            raise ValueError('Transfer observation scope mismatch')
+        from touhou_ai.full_transfer import transfer_evasion as transfer_weights
+        transfer_weights(transfer_evasion, source_manifest, model)
+        transfer_info = dict(checkpoint=str(transfer_evasion),
+                             sha256=source_episode['checkpoint_sha256'],
+                             source_updates=source_episode['total_updates'],
+                             value_scale=1/60, optimizer_reset=True)
     report = {"status": "running", "backend": "real_th10", "contract": contract_id,
               "episodes": [], "gameplay_training_steps": model.num_timesteps,
               "updates": prior[1]["total_updates"] if prior else 0,
@@ -301,25 +359,50 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
               "progression": [{"stage": "input_and_update_connected", "enabled": ["Normal", "Reimu B",
                   "2 frames/action", "9 directions", "shoot", "focus", "hit=-5", "original PPO parameters"]}],
               "update_boundary": "game_over_menu", "telemetry_drops": 0,
-              "between_episodes": "continue_in_same_process", "phase": "initializing",
+              "between_episodes": "stage1_continue; stage2_plus_title_then_new_stage1", "phase": "initializing",
               "first_episode_started_midplay": resume_paused,
               "cpu_threads": {"inference": 1, "optimization": 8},
               "optimization_backend": "directml" if directml else "cpu"}
+    report.update(selection)
+    report['transfer_evasion'] = transfer_info
+    report['rng_contract'] = 'continuous-checkpoint-and-worker-v1'
+    report['resume_rng_restored'] = bool(prior and getattr(model, 'collector_rng_state', None) is not None)
+    if action_grid:
+        report['action_risk_prediction'] = ACTION_GRID_SPEC['action_grid']
+        report['initialization'] = 'evasion weights transferred; value output /60; fresh optimizer' if transfer_info else 'fresh seed; baseline tensors copied and added merge connections zero; no checkpoint warm start'
+    report['action_contract'] = ACTION_CONTRACT if evasion_only else 'standard-v1'
+    report['evasion_only'] = evasion_only
+    report['share_features_extractor'] = model.policy.share_features_extractor
     report['stage_transitions'] = []
+    report['ui_stats_transport'] = 'shared_memory_v1'
+    report['detailed_logs'] = detailed_logs
+    ui_stats = UiStats(output)
     report['recoveries'] = []
     report['reward_version'] = REWARD_VERSION
     report['discount_contract'] = DISCOUNT_CONTRACT
     report['reward_weights'] = REWARD_WEIGHTS
+    if shot_study_games:
+        report['shot_reward_study'] = {'games': shot_study_games, 'scale': shot_reward_scale,
+            'common_checkpoint': str(resume), 'source_reward_version': prior[0]['reward_version']}
+    if upgrade_progress_power:
+        report['reward_transition'] = {'from': prior[0]['reward_version'], 'to': REWARD_VERSION,
+            'old_weights': prior[0]['reward_weights'], 'new_weights': REWARD_WEIGHTS,
+            'policy_optimizer_rng_preserved': True}
     report['reward_enabled'] = REWARD_ENABLED
     report['bomb_schedule'] = BOMB_SCHEDULE if extended else None
-    report['progress_validation'] = 'disabled: no verified milestone source; no inferred awards'
+    report['progress_validation'] = ('enabled: verified_ecl_progress_v1; stage 1 live-validated; '
+                                     'stages 2-6 script-checked, full live validation pending; no inferred awards')
     report['bullet_scope'] = observation_scope
     if dual_grid:
         report['geometry_validation'] = 'binary-derived AABB; live bullet hit/miss trace pending'
         report['grid_rollout_bytes'] = max_steps * sum(
             int(np.prod(s.shape)) * (2 if k.endswith('_grid') else 4)
             for k, s in contract.observation_space.spaces.items())
-    report['disabled'] = ['stable_ids', 'progress_event_detection']
+    report['disabled'] = ['stable_ids'] + (['shoot', 'bomb', 'damage_reward', 'progress_reward'] if evasion_only else [])
+    if evasion_only:
+        report['progression'][0]['enabled'] = ['Normal', 'Reimu B', '2 frames/action', '9 directions', 'focus', 'hit=-60', 'fresh evasion experiment']
+    if not evasion_only:
+        report['progression'][0]['enabled'] = ['Normal', 'Reimu B', '2 frames/action', '9 directions', 'focus', 'shoot', 'scheduled bomb', 'rewards-v17']
     report['combat_validation_pending'] = ['milestone_arrival_defeat_timeout_identity', 'post_bomb_residual_damage']
     if extended:
         report['disabled'] += ['laser_field_validation']
@@ -327,8 +410,8 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                                             'backward_acceleration', 'binary_derived_laser_rectangle']
         report['optimizer_reset_for_migration'] = bool(prior and prior[0]['contract'] != contract_id)
     if dual_grid:
-        report['extended_observations'] = ['local_collision_and_velocity_grid',
-            'global_bullets_enemies_items_player_lasers_grid', 'player_state', 'previous_rewards']
+        report['extended_observations'] = ['local_collision_and_bullet_offset_grid',
+            'global_bullets_enemies_items_player_lasers_grid', 'live_player_shot_coverage', 'player_state', 'previous_rewards']
     atomic_json(output / "status.json", report)
     report['continuous'] = continuous
     report['recovery_attempt_limit'] = None if continuous else 2
@@ -365,6 +448,9 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
         import itertools
         import shutil
         for episode in (itertools.count() if continuous else range(episodes)):
+            if shot_study_games and episode >= shot_study_games:
+                report.update(status='stopped', stop_reason='shot_study_complete')
+                break
             if continuous and shutil.disk_usage(output).free < 5 * 1024**3:
                 report.update(status='stopped', stop_reason='disk_free_below_5_GiB')
                 break
@@ -375,10 +461,14 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
             buffer_type = GridRolloutBuffer if dual_grid else DictRolloutBuffer
             buffer = buffer_type(budget, contract.observation_space, contract.action_space,
                                       device="cpu", gamma=settings["gamma"], gae_lambda=settings["gae_lambda"])
-            rewards = LiveRewards()
+            rewards = DeathOnlyRewards() if evasion_only else (LiveRewards(weights=REWARD_WEIGHTS) if extended else EventRewards())
             episode_id = f"{output.name}-{episode+1}"
             rewards.reset(episode_id)
+            jitter = MotionJitter()
             total_reward, count, hits = 0.0, 0, 0
+            jitter_count, jitter_total = 0, 0.
+            study_metrics = dict(shot_damage_hp=0., shot_reward=0., shoot_decisions=0, first_hit_decision=None)
+            ui_stats.begin_episode()
             terminal = False
             committed_terminal = False
             recovery = None
@@ -422,18 +512,26 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                 bomb_clock = BombClock()
                 if extended:
                     observation['bomb_clock'] = bomb_clock.encode()
-                with log_path.open("x", encoding="utf-8") as log:
+                previous_timing = None
+                with (log_path.open("x", encoding="utf-8") if detailed_logs else nullcontext(None)) as log:
                     for step in range(budget):
                         if (output / "STOP").exists() or time.monotonic() >= deadline:
                             stop_requested = True
                             break
+                        cycle_started = time.perf_counter()
                         with torch.no_grad():
                             tensor, _ = model.policy.obs_to_tensor(observation)
-                            action, values, log_prob = model.policy(tensor)
-                            distributions = model.policy.get_distribution(tensor).distribution
+                            if isinstance(model.policy, TimedBombPolicy):
+                                action, values, log_prob, distributions = model.policy.forward_with_distribution(tensor)
+                            else:
+                                action, values, log_prob = model.policy(tensor)
+                                distributions = model.policy.get_distribution(tensor).distribution
                             probabilities = [d.probs[0].cpu().tolist() for d in distributions]
+                        inference_ms = (time.perf_counter()-cycle_started)*1000
                         step_started = time.perf_counter()
                         chosen = action[0].cpu().numpy()
+                        if evasion_only and (chosen[1] != 0 or chosen[3] != 0):
+                            raise RuntimeError('disabled evasion action sampled')
                         after = runtime.step_gameplay(input_mask(chosen.tolist()), 2)
                         applied = after["input_state_raw"][0]
                         if applied != input_mask(chosen.tolist()) and not (after['lives_raw'] < 0 and applied == 0):
@@ -454,16 +552,27 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                             report['stage_transitions'].append(transition | {'episode': episode+1,
                                 'updates': report['updates'], 'episode_continues': True})
                             atomic_json(output / 'status.json', report)
+                        if extended and not evasion_only and jitter.observe(before, after):
+                            events.append(dict(id=f"jitter:{after['stage']}:{after['stage_frame']}",
+                                kind='jitter', confirmed=True, source='actual_displacement_12f_v1'))
                         reward, components = rewards.calculate(episode_id, events)
+                        if shot_study_games:
+                            study_metrics['shot_damage_hp'] += sum(e['amount'] for e in events if e['kind']=='damage' and e.get('bomb_state')==0)
+                            study_metrics['shot_reward'] += components.get('damage', 0.)
+                            study_metrics['shoot_decisions'] += int(chosen[1])
+                            if study_metrics['first_hit_decision'] is None and any(e['kind']=='hit' for e in events):
+                                study_metrics['first_hit_decision'] = count+1
                         terminal = after["lives_raw"] < 0
                         if after["player"] is None and not terminal:
                             raise RuntimeError("player disappeared outside verified terminal")
+                        encode_started = time.perf_counter()
                         next_observation = observation if after["player"] is None else (
                             contract.encode(after, components) if extended else contract.encode(after))
                         if extended:
                             bomb_clock.advance(2)
                             next_observation = dict(next_observation)
                             next_observation['bomb_clock'] = bomb_clock.encode()
+                        encode_ms = (time.perf_counter()-encode_started)*1000
                         buffer.add(observation, chosen.reshape(1, -1), np.array([reward]),
                                    np.array([step == 0]), values, log_prob)
                         model.num_timesteps += 1
@@ -472,6 +581,9 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                         last_observation = next_observation
                         hits += sum(event['kind'] == 'hit' for event in events)
                         total_reward += reward
+                        jitter_count += sum(event['kind'] == 'jitter' for event in events)
+                        jitter_total += components.get('jitter', 0.)
+                        telemetry_started = time.perf_counter()
                         telemetry = packet(after, episode_id, "live")
                         if dual_grid:
                             # Show the complete scene, not the previous top-40 selection.
@@ -483,6 +595,9 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                                                    'pixels': 192, 'cell_pixels': 2},
                                 'display': 'raw_scene_with_grid_extent', 'frame': after['stage_frame']}
                         from touhou_ai.model_monitor import model_metadata
+                        if action_grid:
+                            telemetry['ai_observation']['action_grid'] = observation['action_grid'].tolist()
+                            telemetry['ai_observation']['action_grid_frame'] = before['stage_frame']
                         telemetry['model'] = model_metadata(model, contract_id,
                             str(resume) if resume else None,
                             reward_weights=REWARD_WEIGHTS)
@@ -503,17 +618,44 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                         telemetry["learning"] = {"steps": model.num_timesteps, "updates": report["updates"],
                             "contract": contract_id, "partial_profile": True, "phase": "playing"}
                         telemetry["capabilities"].update(policy_connected=True, live_training=True)
-                        log.write(json.dumps({"raw": after, "telemetry": telemetry, "events": events,
-                                              'transition': transition}, allow_nan=False)+"\n")
-                        log.flush()
+                        timing = {"inference_ms": inference_ms, "step_observation_transition_ms": after["sample_ms"],
+                                  "encode_ms": encode_ms, "telemetry_ms": (time.perf_counter()-telemetry_started)*1000}
+                        timing.update(action_result.get("runtime_timing_ms", {}))
+                        # Completed previous cycle, including serialization/publication.
+                        # Reuse the existing shared-memory packet; no per-step disk IO.
+                        if previous_timing is not None:
+                            telemetry['previous_cycle_timing'] = previous_timing
+                        log_started = time.perf_counter()
+                        if log is not None:
+                            log.write(json.dumps({"raw": after, "telemetry": telemetry, "events": events,
+                                                  "timing_ms": timing, "previous_step_timing_ms": previous_timing,
+                                                  'transition': transition}, allow_nan=False)+"\n")
+                            log.flush()
+                        timing["log_ms"] = (time.perf_counter()-log_started)*1000
+                        publish_started = time.perf_counter()
+                        ui_stats.add(telemetry, events, terminal, episode_id, settings["gamma"])
+                        timing['ui_stats_ms'] = (time.perf_counter()-publish_started)*1000
+                        transport_started = time.perf_counter()
                         if not publish_telemetry(telemetry):
                             report["telemetry_drops"] += 1
+                        timing['transport_ms'] = (time.perf_counter()-transport_started)*1000
+                        timing["publish_ms"] = (time.perf_counter()-publish_started)*1000
+                        timing["total_ms"] = (time.perf_counter()-cycle_started)*1000
+                        previous_timing = dict(timing, step=count, stage=after['stage'],
+                            frame=after['stage_frame'], terminal=terminal,
+                            transition=action_result.get('transition'),
+                            bullets=len(after.get('bullets') or []), lasers=len(after.get('lasers') or []),
+                            active_lasers=sum(bool(l.get('collision') and l['collision']['active']) for l in (after.get('lasers') or [])),
+                            boss=any(e.get('is_boss') for e in (after.get('enemies') or [])))
                         observation, before = next_observation, after
                         if count % 120 == 0:
                             print(json.dumps({"episode": episode+1, "steps": count, "frame": after["stage_frame"],
                                               "hits": hits, "return": total_reward}), flush=True)
                         if terminal:
                             break
+                ui_stats.flush()
+                if previous_timing is not None:
+                    atomic_json(output / "last-step-timing.json", previous_timing)
                 with torch.no_grad():
                     last_values = model.policy.predict_values(model.policy.obs_to_tensor(observation)[0])
                 # Release the last policy action before any optimizer work.
@@ -590,13 +732,18 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
             model.logger.dump(model.num_timesteps)
             model.logger.close()
             checkpoint = output / f"real-episode-{episode+1}.zip"
+            from touhou_ai.checkpoint_rng import capture_rng
+            model.collector_rng_state = capture_rng()
             model.save(checkpoint)
             expected = model.predict(observation, deterministic=True)[0]
             old_steps = model.num_timesteps
-            loaded = PPO.load(checkpoint, env=contract, device="cpu")
+            from touhou_ai.checkpoint_rng import load_preserving_rng
+            loaded = load_preserving_rng(algorithm, checkpoint, env=contract, device="cpu")
             np.testing.assert_array_equal(expected, loaded.predict(observation, deterministic=True)[0])
             if loaded.num_timesteps != old_steps or fingerprint(loaded) != fingerprint(model):
                 raise AssertionError("checkpoint did not preserve real policy")
+            if capture_rng() != model.collector_rng_state or loaded.collector_rng_state != model.collector_rng_state:
+                raise AssertionError('checkpoint did not preserve collector randomness')
             model = loaded
             hold_samples = 0
             if hold is not None:
@@ -623,14 +770,19 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
             report["gameplay_training_steps"] = model.num_timesteps
             report["episodes"].append({"episode": episode+1, "steps": count, "hits": hits,
                 "return": total_reward, "terminated": terminal, "truncated": not terminal,
+                "jitter_events": jitter_count, "jitter_reward": jitter_total,
                 "final_frame": before["stage_frame"], "budget": budget, "checkpoint": checkpoint.name,
                 "parameters_changed": True, "reload_verified": True,
+                "reload_rng_verified": True,
                 "optimization_threads": 8, "optimization_seconds": optimization_seconds,
                 "optimization": optimization_detail,
                 "game_pid": report["game_pid"], "optimizer_menu_samples": hold_samples,
                 "updated_at_game_over": recovery is None, "recovery_update": recovery is not None,
                 "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
-                "total_steps": model.num_timesteps, "total_updates": report["updates"]})
+                "total_steps": model.num_timesteps, "total_updates": report["updates"],
+                "max_progress": ui_stats.best})
+            if shot_study_games:
+                report['episodes'][-1]['shot_study_metrics'] = study_metrics
             if terminal and recovery is None and not any(p["stage"] == "game_over_boundary_observed" for p in report["progression"]):
                 report["progression"].append({"stage": "game_over_boundary_observed", "episode": episode+1,
                     "evidence": "reserve lives -1, game-over menu held with neutral input throughout PPO/save/reload"})
@@ -663,7 +815,7 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
             if runtime is not None:
                 try:
                     state = runtime.snapshot(full=False)
-                    if (state.get('lives_raw', -1) >= 0 and state.get('mode_flags') == 0
+                    if (state.get('lives_raw', -1) >= 0 and state.get('mode_flags') in (0, 4)
                             and state.get('player') is not None and state.get('pause_words', [0, -1])[1] == 0):
                         from touhou_ai.live_acceptance import pause
                         report['paused_on_exit'] = pause(runtime)['pause_words'][1] == 2
@@ -683,15 +835,21 @@ if __name__ == "__main__":
     parser.add_argument("--max-steps", type=int, default=1800)
     parser.add_argument("--max-seconds", type=int, default=600)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--transfer-evasion", type=Path)
+    parser.add_argument("--upgrade-progress-power", action="store_true")
+    parser.add_argument("--shot-study-games", type=int, default=0)
+    parser.add_argument("--shot-reward-scale", type=float, default=1.)
     parser.add_argument("--continue-managed", action="store_true")
     parser.add_argument("--extended", action="store_true")
     parser.add_argument("--dual-grid", action="store_true", help="new dual-grid campaign; implies extended actions/rewards")
     parser.add_argument("--resume-paused", action="store_true")
     parser.add_argument("--continuous", action="store_true")
+    parser.add_argument("--detailed-logs", action="store_true", help="opt-in per-step full observation diagnostic JSONL")
+    parser.add_argument("--evasion-only", action="store_true", help="death-only rewards; shot and bomb disabled")
     parser.add_argument("--directml", action="store_true", help="isolated GPU updates with CPU rollback")
     args = parser.parse_args()
     try:
-        train(args.output, args.episodes, args.max_steps, args.max_seconds, args.resume, args.continue_managed, args.extended, args.resume_paused, args.continuous, args.dual_grid, args.directml)
+        train(args.output, args.episodes, args.max_steps, args.max_seconds, args.resume, args.continue_managed, args.extended, args.resume_paused, args.continuous, args.dual_grid, args.directml, args.detailed_logs, args.evasion_only, args.transfer_evasion, args.upgrade_progress_power, args.shot_study_games, args.shot_reward_scale)
     except BaseException as error:
         status_path = args.output / "status.json"
         if args.output.exists() and not status_path.exists():

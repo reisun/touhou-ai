@@ -1,0 +1,21 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const src=fs.readFileSync('dashboard/obs.js','utf8');
+const output={textContent:''};
+const ctx={$:id=>{assert.equal(id,'episodeReturn');return output;},fmt:v=>Number.isFinite(v)?v.toFixed(2):'—'};
+vm.createContext(ctx);
+vm.runInContext(src.slice(src.indexOf('let rewardEpisode='),src.indexOf('function render(f,fresh)')),ctx);
+const show=f=>{ctx.renderEpisodeReturn(f);return output.textContent;};
+const packet=(id,value,phase='playing')=>({episode_id:id,learning:{phase},reward:{episode_return:value}});
+assert.equal(show(null),'—');
+assert.equal(show(packet('run-1',0)),'0.00');
+assert.equal(show(packet('run-1',12.5)),'12.50');
+assert.equal(show(packet('run-1',12.5)),'12.50'); // cumulative source: no double counting
+assert.equal(show(packet('run-1',-47.5)),'-47.50');
+assert.equal(show(packet('run-1',undefined,'stage_transition')),'-47.50');
+assert.equal(show(packet('run-1',22,'optimizing_at_game_over')),'22.00');
+assert.equal(show(packet('run-2',undefined)),'0.00');
+assert.equal(show(packet('run-2',3)),'3.00');
+assert.equal(show(packet('new-run-1',0)),'0.00');
+const stats=src.slice(src.indexOf('function renderStats('),src.indexOf('const source=new EventSource'));
+assert(!stats.includes('episodeReturn'));
+console.log('Live cumulative reward: updates, penalties, transitions, reset and no history overwrite passed');

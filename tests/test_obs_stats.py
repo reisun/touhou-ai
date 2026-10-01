@@ -22,7 +22,7 @@ class ObsStatsTests(unittest.TestCase):
             stats = ObsStats(root).snapshot()
             self.assertEqual([e['return'] for e in stats['growth']], [5])
 
-    def test_old_contract_history_is_not_mixed(self):
+    def test_standalone_old_archive_remains_viewable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             run = root / 'live-learning-old'
@@ -31,7 +31,7 @@ class ObsStatsTests(unittest.TestCase):
                 'reward_version': 'th10-rewards-v2', 'bullet_scope': SPEC,
                 'episodes': [{'reload_verified': True, 'return': -10}]}))
             stats = ObsStats(root).snapshot()
-            self.assertEqual(stats['growth'], [])
+            self.assertEqual([e['return'] for e in stats['growth']], [-10])
             self.assertIn('damage', stats['totals'])
             self.assertIn('progress', stats['totals'])
 
@@ -41,7 +41,8 @@ class ObsStatsTests(unittest.TestCase):
             run = root / 'live-learning-test'
             run.mkdir()
             (run / 'status.json').write_text(json.dumps({'backend': 'real_th10', 'episodes': [],
-                                                       'reward_version': VERSION, 'bullet_scope': SPEC}))
+                                                       'reward_version': VERSION, 'bullet_scope': SPEC,
+                                                       'reward_weights': {'hit': -5}}))
             def row(t, value, reward, dead=False):
                 return json.dumps({'raw': {'lives_raw': -1 if dead else 2}, 'telemetry': {
                     'timestamp': t, 'episode_id': 'one', 'policy': {'value': value},

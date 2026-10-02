@@ -1,8 +1,8 @@
 """Versioned real-game rewards; event-time evidence only, never inferred kills."""
 import math
-from touhou_ai.motion_jitter import SOURCE as JITTER_SOURCE
+from touhou_ai.vibration_reward import SOURCE as JITTER_SOURCE
 from touhou_ai.progress_schema import MILESTONES, progress_point
-VERSION = 'th10-rewards-v22'
+VERSION = 'th10-rewards-v23'
 # v17 scale retained, except the explicitly increased progress Power coefficient.
 WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': -.1, 'power_gain': .1}
 
@@ -96,7 +96,11 @@ class LiveRewards:
             elif kind == 'jitter':
                 if e.get('source') != JITTER_SOURCE:
                     raise ValueError('unverified jitter source')
-                reward = self.weights['jitter']
+                amount = e.get('amount')
+                if (type(amount) not in (int, float) or not math.isfinite(amount)
+                        or not 0 < amount <= 1./30):
+                    raise ValueError('invalid vibration reward fraction')
+                reward = self.weights['jitter'] * amount
             elif kind == 'hit':
                 reward = self.weights['hit']
             else:

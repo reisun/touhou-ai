@@ -30,11 +30,8 @@ if ($Action -eq 'rehearse') {
     $profile = Get-Content (Join-Path $root 'configs/sharu-inspired-v1.json') | ConvertFrom-Json
     $policyChoice = if ($EvasionOnly) { $profile.evasion_policy_overrides } else { $profile.full_policy_overrides }
     $expectedGridContract = if ($policyChoice.cnn_architecture -eq 'narrow_action_grid') { 'th10-dual-grid-v6-action-grid-v1' } else { 'th10-dual-grid-v6' }
-    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v22' }
-    if ($UpgradeJitter) {
-        if ($EvasionOnly -or -not $DualGrid -or -not $ResumeCheckpoint -or $TransferEvasion -or $UpgradeProgressPower -or $AddPowerReward -or $ShotStudyGames) { throw 'Jitter upgrade requires a full v21 checkpoint resume' }
-        $expectedReward = 'th10-rewards-v21'
-    }
+    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v23' }
+    if ($UpgradeJitter) { throw 'Vibration reward v23 requires a fresh campaign' }
     if ($AddPowerReward) {
         if ($EvasionOnly -or -not $DualGrid -or -not $ResumeCheckpoint -or $TransferEvasion -or $UpgradeProgressPower) { throw 'Power reward addition requires a full v19 checkpoint resume' }
         $expectedReward = 'th10-rewards-v19'

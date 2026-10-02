@@ -1,5 +1,5 @@
 """Bounded on-policy learning from the real game; staged, explicitly partial contract."""
-from touhou_ai.motion_jitter import MotionJitter, SOURCE as JITTER_SOURCE, SPEC as JITTER_SPEC
+from touhou_ai.vibration_reward import VibrationReward, SOURCE as JITTER_SOURCE, SPEC as JITTER_SPEC
 from contextlib import nullcontext
 from touhou_ai.ui_stats import UiStats
 import argparse
@@ -271,11 +271,7 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
         raise ValueError("bounded rehearsal budgets required")
     prior = resume_manifest(resume, extended, dual_grid) if resume is not None else None
     if upgrade_jitter:
-        if (not prior or evasion_only or not dual_grid or transfer_evasion
-                or upgrade_progress_power or add_power_reward or shot_study_games
-                or prior[0].get('reward_version') != 'th10-rewards-v21'
-                or prior[0].get('reward_weights') != REWARD_WEIGHTS):
-            raise ValueError('Jitter upgrade requires the unchanged full v21 reward weights')
+        raise ValueError('Vibration reward v23 requires a fresh campaign')
     if add_power_reward:
         from touhou_ai.live_rewards import validate_power_gain_upgrade
         if not prior or evasion_only or transfer_evasion or not dual_grid or upgrade_progress_power:
@@ -476,7 +472,7 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
             rewards = DeathOnlyRewards() if evasion_only else (LiveRewards(weights=REWARD_WEIGHTS) if extended else EventRewards())
             episode_id = f"{output.name}-{episode+1}"
             rewards.reset(episode_id)
-            jitter = MotionJitter()
+            jitter = VibrationReward()
             total_reward, count, hits = 0.0, 0, 0
             jitter_count, jitter_total = 0, 0.
             power_gain_raw, power_gain_reward = 0, 0.
@@ -565,9 +561,10 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                             report['stage_transitions'].append(transition | {'episode': episode+1,
                                 'updates': report['updates'], 'episode_continues': True})
                             atomic_json(output / 'status.json', report)
-                        if extended and not evasion_only and jitter.observe(before, after):
+                        jitter_fraction = jitter.observe(before, after) if extended and not evasion_only else 0.
+                        if jitter_fraction:
                             events.append(dict(id=f"jitter:{after['stage']}:{after['stage_frame']}",
-                                kind='jitter', confirmed=True, source=JITTER_SOURCE))
+                                kind='jitter', confirmed=True, source=JITTER_SOURCE, amount=jitter_fraction))
                         reward, components = rewards.calculate(episode_id, events)
                         if shot_study_games:
                             study_metrics['shot_damage_hp'] += sum(e['amount'] for e in events if e['kind']=='damage' and e.get('bomb_state')==0)

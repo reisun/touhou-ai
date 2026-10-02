@@ -2,7 +2,7 @@
 setTimeout(() => location.reload(), 5 * 60 * 1000);
 const $=id=>document.getElementById(id), compact=new URLSearchParams(location.search).get('mode')==='obs2';
 document.body.classList.toggle('compact',compact);$(compact?'obs2':'obs1').hidden=false;
-const labels={progress:'進行度',damage:'ショットダメージ',power_gain:'Power取得',hit:'被弾',jitter:'往復減点'};
+const labels={progress:'進行度',damage:'ショットダメージ',power_gain:'Power取得',hit:'被弾',jitter:'振動減点'};
 const fmt=(v,n=2)=>Number.isFinite(v)?v.toFixed(n):'—';
 const order=[8,1,2,7,0,3,6,5,4], icons=['circle','arrow-up','arrow-up-right','arrow-right','arrow-down-right','arrow-down','arrow-down-left','arrow-left','arrow-up-left'];
 let frame=null, pending=null, stats=null;
@@ -228,7 +228,7 @@ let previousFresh=null;
 function synchronizedSummary(){
  const points=stats?.points||[];$('value').textContent=fmt(points.length?points[points.length-1].value:null);
  const w=stats?.weights||{},signed=v=>Number.isFinite(v)?`${v>0?'+':''}${fmt(v,1)}`:'—';
-for(const [i,key] of Object.keys(labels).entries()){const e=$('weights').children[i]?.querySelector('strong');if(!e)continue;const texts={damage:`${fmt(w.damage)} + ${fmt(w.damage*w.damage_power,3)} × Power / 1000HPごと・ボム中0`,progress:`${fmt(w.progress)} + ${fmt(w.progress_life)} × 残機 + ${fmt(w.progress_power)} × Power・ボム中0`,hit:`${signed(w.hit)} / 1回`,jitter:`${signed(w.jitter)} / 往復判定1回（最短12F間隔）`,power_gain:`${fmt(w.power_gain)} × 獲得Power・ボム中0`};e.textContent=texts[key];e.classList.toggle('muted',!(stats?.enabled||[]).includes(key));}
+for(const [i,key] of Object.keys(labels).entries()){const e=$('weights').children[i]?.querySelector('strong');if(!e)continue;const texts={damage:`${fmt(w.damage)} + ${fmt(w.damage*w.damage_power,3)} × Power / 1000HPごと・ボム中0`,progress:`${fmt(w.progress)} + ${fmt(w.progress_life)} × 残機 + ${fmt(w.progress_power)} × Power・ボム中0`,hit:`${signed(w.hit)} / 1回`,jitter:stats?.reward_version==='th10-rewards-v23'?`${signed(w.jitter)} × min(振動量 / 4, 1) / 秒・移動変化時`:`${signed(w.jitter)} / 往復判定1回（最短12F間隔）`,power_gain:`${fmt(w.power_gain)} × 獲得Power・ボム中0`};e.textContent=texts[key];e.classList.toggle('muted',!(stats?.enabled||[]).includes(key));}
 }
 function tick(){let changed=false;if(pending){frame=pending;pending=null;changed=true;}const fresh=!!frame&&Date.now()/1000-frame.timestamp<2.5;$('status').textContent=fresh?(frame.learning?.phase==='playing'?'LIVE / 実機制御':'LIVE / 観測中'):'停止 / 最終観測';const banner=learningBannerState(frame,stats,fresh);if($('learningBanner').textContent!==banner.text)$('learningBanner').textContent=banner.text;$('learningBanner').classList.toggle('playing',banner.playing);if(frame&&(changed||fresh!==previousFresh)){render(frame,fresh);synchronizedSummary();}previousFresh=fresh;requestAnimationFrame(tick);}requestAnimationFrame(tick);
 async function poll(){try{const r=await fetch('/api/obs');if(!r.ok)throw Error();stats=await r.json();renderStats(stats);synchronizedSummary();}catch{$('samples').textContent='集計接続待ち';}finally{setTimeout(poll,1000);}}poll();

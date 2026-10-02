@@ -81,7 +81,7 @@ class VibrationTests(unittest.TestCase):
     def test_fraction_validation_and_reward(self):
         r=LiveRewards();r.reset('t')
         e=dict(id='j',kind='jitter',confirmed=True,source=SOURCE,amount=1./30)
-        reward,parts=r.calculate('t',[e]);self.assertAlmostEqual(reward,-.1/30)
+        reward,parts=r.calculate('t',[e]);self.assertEqual(reward,0);self.assertNotIn('jitter',parts)
         self.assertEqual(r.calculate('t',[e])[0],0)
         for amount in [None,float('nan'),-.1,.1,True]:
             r.reset('t')

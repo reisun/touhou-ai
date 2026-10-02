@@ -2,9 +2,9 @@
 import math
 from touhou_ai.vibration_reward import SOURCE as JITTER_SOURCE
 from touhou_ai.progress_schema import MILESTONES, progress_point
-VERSION = 'th10-rewards-v24'
+VERSION = 'th10-rewards-v25'
 # v17 scale retained, except the explicitly increased progress Power coefficient.
-WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': -.1, 'power_gain': .1}
+WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': 0., 'power_gain': .1}
 
 def validate_power_upgrade(manifest):
     if (manifest.get('reward_version') != 'th10-rewards-v17'
@@ -18,7 +18,7 @@ def validate_power_gain_upgrade(manifest):
         raise ValueError('Power gain addition requires exactly the full v19 reward contract')
 
 
-ENABLED = ['damage', 'progress', 'hit', 'jitter', 'power_gain']
+ENABLED = ['damage', 'progress', 'hit', 'power_gain']
 # Engine paths: live stage-1 acceptance; stage 1..6 mappings: pinned ECL review.
 VERIFIED_PROGRESS_SOURCES = frozenset({'verified_ecl_progress_v1', 'verified_ecl_progress_v2'})
 

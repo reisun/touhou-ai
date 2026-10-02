@@ -1,0 +1,7 @@
+2026-10-02 震動減点廃止・初期学習
+報酬v25: jitter係数0、有効報酬リストから除外。実機の震動判定計算も無効。
+射撃・進行度・被弾・Power取得の設定は維持。
+旧モデル494更新をartifacts/no-vibration-reset-20261002/preserved-model.zipへ保存。
+SHA256 11ab67f0a86237cb380e8611551bfd5bc688e4cf9ba467cb5ad859857946392d
+ResumeCheckpoint指定なしで初期重みから連続実機学習を開始。
+関連テスト35件成功。

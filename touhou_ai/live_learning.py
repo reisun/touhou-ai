@@ -271,11 +271,7 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
         raise ValueError("bounded rehearsal budgets required")
     prior = resume_manifest(resume, extended, dual_grid) if resume is not None else None
     if upgrade_jitter:
-        from touhou_ai.live_rewards import validate_vibration_upgrade
-        if (not prior or evasion_only or not dual_grid or transfer_evasion
-                or upgrade_progress_power or add_power_reward or shot_study_games):
-            raise ValueError('Averaged vibration upgrade requires a full v23 resume')
-        validate_vibration_upgrade(prior[0])
+        raise ValueError('Vibration reward retired; start a fresh v25 campaign')
     if add_power_reward:
         from touhou_ai.live_rewards import validate_power_gain_upgrade
         if not prior or evasion_only or transfer_evasion or not dual_grid or upgrade_progress_power:
@@ -390,7 +386,7 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
     ui_stats = UiStats(output)
     report['recoveries'] = []
     report['reward_version'] = REWARD_VERSION
-    report['jitter_detector'] = JITTER_SPEC if extended and not evasion_only else None
+    report['jitter_detector'] = JITTER_SPEC if extended and not evasion_only and 'jitter' in REWARD_ENABLED else None
     report['discount_contract'] = DISCOUNT_CONTRACT
     report['reward_weights'] = REWARD_WEIGHTS
     if shot_study_games:
@@ -565,7 +561,7 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
                             report['stage_transitions'].append(transition | {'episode': episode+1,
                                 'updates': report['updates'], 'episode_continues': True})
                             atomic_json(output / 'status.json', report)
-                        jitter_fraction = jitter.observe(before, after) if extended and not evasion_only else 0.
+                        jitter_fraction = jitter.observe(before, after) if extended and not evasion_only and 'jitter' in REWARD_ENABLED else 0.
                         if jitter_fraction:
                             events.append(dict(id=f"jitter:{after['stage']}:{after['stage_frame']}",
                                 kind='jitter', confirmed=True, source=JITTER_SOURCE, amount=jitter_fraction))

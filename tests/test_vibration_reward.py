@@ -1,15 +1,47 @@
 import unittest
 import numpy as np
-from touhou_ai.vibration_reward import VibrationReward, vibration, SOURCE
+from touhou_ai.vibration_reward import VibrationReward, vibration, vibration_components, SOURCE
 from touhou_ai.live_rewards import LiveRewards
-from scripts.analyze_vibration_metric import metric
+from touhou_ai.live_rewards import validate_vibration_upgrade, WEIGHTS
 
 class VibrationTests(unittest.TestCase):
-    def test_matches_diagnostic_metric(self):
+    def test_regular_taps_have_constant_average_velocity(self):
+        tap = vibration_components([(4,0),(0,0)]*9)
+        shake = vibration_components([(4,0),(-4,0)]*9)
+        self.assertAlmostEqual(tap['averaged_velocity_residual'],0)
+        self.assertGreater(tap['vibration'],0)
+        self.assertAlmostEqual(tap['vibration']*2,shake['vibration'])
+        self.assertLess(tap['vibration'],1.1)
+        slower = vibration_components(([(4,0)]*2+[(0,0)]*2)*4+[(4,0)]*2)
+        self.assertAlmostEqual(slower['averaged_velocity_residual'],0)
+        self.assertLess(slower['vibration'],1.5)
+
+    def test_rotation_drift_and_phase_invariance(self):
+        base=np.array([(4,0),(0,0)]*9,dtype=float)
+        r=np.array([[.6,-.8],[.8,.6]])
+        score=vibration(base)
+        self.assertAlmostEqual(score,vibration(base@r))
+        self.assertAlmostEqual(score,vibration(base+[2,3]))
+        self.assertAlmostEqual(score,vibration(base[::-1]))
+        self.assertAlmostEqual(score*2,vibration(base*2))
+
+    def test_independent_position_fit(self):
         rng=np.random.default_rng(20)
-        for _ in range(200):
-            v=rng.integers(-9,10,size=(18,2)).astype(float)
-            self.assertAlmostEqual(vibration(v),metric(v)['vibration'],places=10)
+        for _ in range(40):
+            v=rng.normal(size=(18,2))*4
+            pos=np.vstack([np.zeros((1,2)),np.cumsum(v,axis=0)])
+            design=np.column_stack([np.ones(19),np.arange(19)])
+            fitted=design@np.linalg.lstsq(design,pos,rcond=None)[0]
+            expected=np.sqrt(np.mean(np.sum((pos-fitted)**2,axis=1)))
+            self.assertAlmostEqual(vibration_components(v)['position_rms_pixels'],expected)
+
+    def test_migration_rejects_other_contracts(self):
+        manifest=dict(reward_version='th10-rewards-v23',reward_weights=WEIGHTS,
+                      jitter_detector=dict(version='actual_displacement_vibration_36f_v1'))
+        validate_vibration_upgrade(manifest)
+        for change in [dict(reward_version='th10-rewards-v22'),dict(reward_weights={}),
+                       dict(evasion_only=True),dict(jitter_detector={})]:
+            with self.assertRaises(ValueError):validate_vibration_upgrade(manifest|change)
 
     def test_straight_single_turn_and_single_stop(self):
         for path in ([(4,0)]*60, [(0,0)]*60,

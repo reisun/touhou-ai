@@ -64,7 +64,7 @@ class MotionJitterTests(unittest.TestCase):
         self.assertEqual(flagged, [False, False, False, True, False, False])
         rewards = LiveRewards(); rewards.reset('test')
         event = dict(id='jitter:1:12', kind='jitter', confirmed=True,
-                     source='actual_displacement_vibration_36f_v1', amount=1./30)
+                     source='actual_displacement_averaged_vibration_36f_v2', amount=1./30)
         total, parts = rewards.calculate('test', [event])
         self.assertAlmostEqual(total, -.1/30)
         self.assertAlmostEqual(parts['jitter'], -.1/30)

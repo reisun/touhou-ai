@@ -271,7 +271,11 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
         raise ValueError("bounded rehearsal budgets required")
     prior = resume_manifest(resume, extended, dual_grid) if resume is not None else None
     if upgrade_jitter:
-        raise ValueError('Vibration reward v23 requires a fresh campaign')
+        from touhou_ai.live_rewards import validate_vibration_upgrade
+        if (not prior or evasion_only or not dual_grid or transfer_evasion
+                or upgrade_progress_power or add_power_reward or shot_study_games):
+            raise ValueError('Averaged vibration upgrade requires a full v23 resume')
+        validate_vibration_upgrade(prior[0])
     if add_power_reward:
         from touhou_ai.live_rewards import validate_power_gain_upgrade
         if not prior or evasion_only or transfer_evasion or not dual_grid or upgrade_progress_power:

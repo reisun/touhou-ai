@@ -18,6 +18,7 @@ param(
     [switch]$AddPowerReward,
     [switch]$UpgradeJitter,
     [switch]$UpdateShotReward,
+    [switch]$UpdateProgressReward,
     [ValidateRange(0,5)][int]$ShotStudyGames = 0,
     [ValidateSet(1.0,0.5)][double]$ShotRewardScale = 1.0,
     [string]$ResumeCheckpoint
@@ -31,7 +32,11 @@ if ($Action -eq 'rehearse') {
     $profile = Get-Content (Join-Path $root 'configs/sharu-inspired-v1.json') | ConvertFrom-Json
     $policyChoice = if ($EvasionOnly) { $profile.evasion_policy_overrides } else { $profile.full_policy_overrides }
     $expectedGridContract = if ($policyChoice.cnn_architecture -eq 'narrow_action_grid') { 'th10-dual-grid-v6-action-grid-v1' } else { 'th10-dual-grid-v6' }
-    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v26' }
+    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v27' }
+    if ($UpdateProgressReward) {
+        if (-not $ResumeCheckpoint -or -not $DualGrid -or $EvasionOnly -or $UpdateShotReward -or $UpgradeJitter -or $AddPowerReward -or $UpgradeProgressPower -or $TransferEvasion -or $ShotStudyGames) { throw 'Progress update requires full v26 resume' }
+        $expectedReward = 'th10-rewards-v26'
+    }
     if ($UpdateShotReward) {
         if (-not $ResumeCheckpoint -or -not $DualGrid -or $EvasionOnly -or $UpgradeJitter -or $AddPowerReward -or $UpgradeProgressPower -or $TransferEvasion -or $ShotStudyGames) { throw 'Shot update requires full v25 resume' }
         $expectedReward = 'th10-rewards-v25'
@@ -152,6 +157,7 @@ if ($Action -eq 'rehearse') {
         if ($EvasionOnly) { $gameArgs += '--evasion-only' }
         if ($DetailedLogs) { $gameArgs += '--detailed-logs' }
         if ($AddPowerReward) { $gameArgs += '--add-power-reward' }
+        if ($UpdateProgressReward) { $gameArgs += '--update-progress-reward' }
         if ($UpdateShotReward) { $gameArgs += '--update-shot-reward' }
         if ($UpgradeJitter) { $gameArgs += '--upgrade-jitter' }
         if ($UpgradeProgressPower) { $gameArgs += '--upgrade-progress-power' }

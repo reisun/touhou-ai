@@ -23,7 +23,7 @@ class LiveRewardTests(unittest.TestCase):
                            power_raw=power, bomb_state=0)]
             previous = LiveRewards(weights=old); previous.reset('test')
             expected, parts = previous.calculate('test', events)
-            v17 = LiveRewards(weights=WEIGHTS | {'damage': .25, 'progress_power': 2./60}); v17.reset('test')
+            v17 = LiveRewards(weights=WEIGHTS | {'damage': .25, 'progress':20./60, 'progress_life_exponent':1., 'progress_power': 2./60}); v17.reset('test')
             actual, scaled = v17.calculate('test', events)
             self.assertAlmostEqual(actual, expected / 60)
             for key in parts:
@@ -93,7 +93,7 @@ class LiveRewardTests(unittest.TestCase):
         after = before | dict(stage_frame=2554, power_raw=0, progress_reward_events=[e])
         r = self.rewards()
         _, parts = r.calculate('test', observed_events(before, after))
-        self.assertAlmostEqual(parts['progress'], 50 / 60 + .1 * 1.05)
+        self.assertAlmostEqual(parts['progress'], .7 + .1 * 1.05)
         self.assertEqual(r.calculate('test', [e | {'id': 'duplicate'}])[0], 0)
 
     def test_progress_formula_and_per_play_stage_milestone_dedup(self):
@@ -103,10 +103,10 @@ class LiveRewardTests(unittest.TestCase):
                 for name in MILESTONES:
                     e = dict(id=f'{stage}:{name}', kind='progress', confirmed=True,
                              source='fixture', stage=stage, milestone=name, lives_raw=2, power_raw=100, bomb_state=0)
-                    self.assertAlmostEqual(r.calculate('test', [e])[0], 80 / 60 + .1 * 5)
+                    self.assertAlmostEqual(r.calculate('test', [e])[0], .2 + .5 * 2**1.5 + .1 * 5)
                     self.assertEqual(r.calculate('test', [e | {'id': e['id']+'new'}])[0], 0)
             r.reset('test')
-            self.assertAlmostEqual(r.calculate('test', [e | {'lives_raw': 1, 'power_raw': 60}])[0], 50 / 60 + .1 * 3)
+            self.assertAlmostEqual(r.calculate('test', [e | {'lives_raw': 1, 'power_raw': 60}])[0], .7 + .1 * 3)
 
     def test_progress_bomb_boundary_and_no_delayed_bonus(self):
         for milestone in MILESTONES:
@@ -121,7 +121,7 @@ class LiveRewardTests(unittest.TestCase):
             self.assertEqual(r.calculate('test', [e | dict(id='later', bomb_state=0)])[0], 0)
             r.reset('test')
             after.update(bomb={'state': 1}, progress_reward_events=[e | dict(bomb_state=0)])
-            self.assertAlmostEqual(r.calculate('test', observed_events(before, after))[0], 80 / 60 + .1 * 5)
+            self.assertAlmostEqual(r.calculate('test', observed_events(before, after))[0], .2 + .5 * 2**1.5 + .1 * 5)
 
     def test_progress_unknown_bomb_state_is_transactional(self):
         e = dict(id='p', kind='progress', confirmed=True,
@@ -132,7 +132,7 @@ class LiveRewardTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'bomb state'):
                 r.calculate('test', [damage(), e | dict(bomb_state=state)])
             self.assertEqual(r.calculate('test', [damage()])[0], .2)
-            self.assertAlmostEqual(r.calculate('test', [e | dict(bomb_state=0)])[0], 80 / 60 + .1 * 5)
+            self.assertAlmostEqual(r.calculate('test', [e | dict(bomb_state=0)])[0], .2 + .5 * 2**1.5 + .1 * 5)
 
 class ShotUpdateTests(unittest.TestCase):
     def test_only_exact_v25_migrates(self):
@@ -141,3 +141,14 @@ class ShotUpdateTests(unittest.TestCase):
         validate_shot_update(old)
         for change in [dict(reward_version='th10-rewards-v24'),dict(evasion_only=True),dict(reward_weights=WEIGHTS)]:
             with self.assertRaises(ValueError):validate_shot_update(old|change)
+
+class ProgressUpdateTests(unittest.TestCase):
+    def test_all_lives_and_migration(self):
+        from touhou_ai.live_rewards import WEIGHTS, validate_progress_update
+        old=dict(reward_version='th10-rewards-v26',reward_weights={k:v for k,v in WEIGHTS.items() if k!='progress_life_exponent'}|{'progress':20./60})
+        validate_progress_update(old)
+        with self.assertRaises(ValueError):validate_progress_update(old|{'reward_weights':WEIGHTS})
+        for lives in range(9):
+            r=LiveRewards();r.reset('t')
+            e=dict(id='p',kind='progress',confirmed=True,source='verified_ecl_progress_v1',stage=1,milestone='boss_defeat',lives_raw=lives,power_raw=60,bomb_state=0)
+            self.assertAlmostEqual(r.calculate('t',[e])[0],.2+.5*lives**1.5+.3)

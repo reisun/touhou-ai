@@ -2,9 +2,9 @@
 import math
 from touhou_ai.vibration_reward import SOURCE as JITTER_SOURCE
 from touhou_ai.progress_schema import MILESTONES, progress_point
-VERSION = 'th10-rewards-v26'
+VERSION = 'th10-rewards-v27'
 # v17 scale retained, except the explicitly increased progress Power coefficient.
-WEIGHTS = {'damage': .2, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': 0., 'power_gain': .1}
+WEIGHTS = {'damage': .2, 'damage_power': .5, 'progress': .2, 'progress_life_exponent': 1.5, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': 0., 'power_gain': .1}
 
 def validate_power_upgrade(manifest):
     if (manifest.get('reward_version') != 'th10-rewards-v17'
@@ -77,7 +77,7 @@ class LiveRewards:
                     if type(e.get('bomb_state')) is not int or e['bomb_state'] not in (0, 1):
                         raise ValueError('unknown event-time bomb state')
                     if e['bomb_state'] == 0:
-                        reward = self.weights['progress'] + self.weights['progress_life'] * lives + self.weights['progress_power'] * power
+                        reward = self.weights['progress'] + self.weights['progress_life'] * lives ** self.weights.get('progress_life_exponent', 1.) + self.weights['progress_power'] * power
                     # Suppressed milestones are consumed too; no delayed bonus.
                     milestones.add(key)
             elif kind == 'power_gain':
@@ -145,3 +145,9 @@ def validate_shot_update(manifest):
             or manifest.get('reward_weights') != dict(WEIGHTS, damage=.25)
             or manifest.get('evasion_only')):
         raise ValueError('Shot update requires full v25 reward contract')
+
+
+def validate_progress_update(manifest):
+    expected={k:v for k,v in WEIGHTS.items() if k != 'progress_life_exponent'} | {'progress':20./60}
+    if manifest.get('reward_version') != 'th10-rewards-v26' or manifest.get('reward_weights') != expected or manifest.get('evasion_only'):
+        raise ValueError('Progress update requires full v26 reward contract')

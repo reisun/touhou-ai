@@ -2,9 +2,9 @@
 import math
 from touhou_ai.vibration_reward import SOURCE as JITTER_SOURCE
 from touhou_ai.progress_schema import MILESTONES, progress_point
-VERSION = 'th10-rewards-v25'
+VERSION = 'th10-rewards-v26'
 # v17 scale retained, except the explicitly increased progress Power coefficient.
-WEIGHTS = {'damage': 15./60, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': 0., 'power_gain': .1}
+WEIGHTS = {'damage': .2, 'damage_power': .5, 'progress': 20./60, 'progress_life': 30./60, 'progress_power': .1, 'hit': -1., 'power_down': 0., 'jitter': 0., 'power_gain': .1}
 
 def validate_power_upgrade(manifest):
     if (manifest.get('reward_version') != 'th10-rewards-v17'
@@ -138,3 +138,10 @@ def validate_vibration_upgrade(manifest):
             or (manifest.get('jitter_detector') or {}).get('version') !=
                 'actual_displacement_vibration_36f_v1'):
         raise ValueError('Averaged vibration upgrade requires the full v23 contract')
+
+
+def validate_shot_update(manifest):
+    if (manifest.get('reward_version') != 'th10-rewards-v25'
+            or manifest.get('reward_weights') != dict(WEIGHTS, damage=.25)
+            or manifest.get('evasion_only')):
+        raise ValueError('Shot update requires full v25 reward contract')

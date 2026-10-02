@@ -17,6 +17,7 @@ param(
     [switch]$UpgradeProgressPower,
     [switch]$AddPowerReward,
     [switch]$UpgradeJitter,
+    [switch]$UpdateShotReward,
     [ValidateRange(0,5)][int]$ShotStudyGames = 0,
     [ValidateSet(1.0,0.5)][double]$ShotRewardScale = 1.0,
     [string]$ResumeCheckpoint
@@ -30,7 +31,11 @@ if ($Action -eq 'rehearse') {
     $profile = Get-Content (Join-Path $root 'configs/sharu-inspired-v1.json') | ConvertFrom-Json
     $policyChoice = if ($EvasionOnly) { $profile.evasion_policy_overrides } else { $profile.full_policy_overrides }
     $expectedGridContract = if ($policyChoice.cnn_architecture -eq 'narrow_action_grid') { 'th10-dual-grid-v6-action-grid-v1' } else { 'th10-dual-grid-v6' }
-    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v25' }
+    $expectedReward = if ($EvasionOnly) { 'th10-evasion-death-only-v1' } else { 'th10-rewards-v26' }
+    if ($UpdateShotReward) {
+        if (-not $ResumeCheckpoint -or -not $DualGrid -or $EvasionOnly -or $UpgradeJitter -or $AddPowerReward -or $UpgradeProgressPower -or $TransferEvasion -or $ShotStudyGames) { throw 'Shot update requires full v25 resume' }
+        $expectedReward = 'th10-rewards-v25'
+    }
     if ($UpgradeJitter) { throw 'Vibration reward retired; start a fresh v25 campaign' }
     if ($AddPowerReward) {
         if ($EvasionOnly -or -not $DualGrid -or -not $ResumeCheckpoint -or $TransferEvasion -or $UpgradeProgressPower) { throw 'Power reward addition requires a full v19 checkpoint resume' }
@@ -147,6 +152,7 @@ if ($Action -eq 'rehearse') {
         if ($EvasionOnly) { $gameArgs += '--evasion-only' }
         if ($DetailedLogs) { $gameArgs += '--detailed-logs' }
         if ($AddPowerReward) { $gameArgs += '--add-power-reward' }
+        if ($UpdateShotReward) { $gameArgs += '--update-shot-reward' }
         if ($UpgradeJitter) { $gameArgs += '--upgrade-jitter' }
         if ($UpgradeProgressPower) { $gameArgs += '--upgrade-progress-power' }
         if ($ShotStudyGames) { $gameArgs += @('--shot-study-games', "$ShotStudyGames", '--shot-reward-scale', $ShotRewardScale.ToString([Globalization.CultureInfo]::InvariantCulture)) }

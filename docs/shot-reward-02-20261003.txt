@@ -1,0 +1,7 @@
+2026-10-03 ショット報酬変更
+報酬v26: (0.2 + 0.1 * Power) / 1000HP、ボム中0。
+内部damage=.2、damage_power=.5（乗算展開でPower係数.1）。他報酬変更なし。
+旧v25の270更新checkpoint保存後、その重みから継続。初期化なし。
+旧モデル: artifacts/shot02-reset-20261003/preserved-model.zip。
+新run: live-learning-20261003-043836-3c1df6。
+テスト16件成功。OBS表示はreward_weightsから生成。

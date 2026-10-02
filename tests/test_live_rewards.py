@@ -23,7 +23,7 @@ class LiveRewardTests(unittest.TestCase):
                            power_raw=power, bomb_state=0)]
             previous = LiveRewards(weights=old); previous.reset('test')
             expected, parts = previous.calculate('test', events)
-            v17 = LiveRewards(weights=WEIGHTS | {'progress_power': 2./60}); v17.reset('test')
+            v17 = LiveRewards(weights=WEIGHTS | {'damage': .25, 'progress_power': 2./60}); v17.reset('test')
             actual, scaled = v17.calculate('test', events)
             self.assertAlmostEqual(actual, expected / 60)
             for key in parts:
@@ -46,15 +46,15 @@ class LiveRewardTests(unittest.TestCase):
         r = LiveRewards(); r.reset('test'); return r
 
     def test_power_multiplier_and_bomb_boundaries(self):
-        for raw, expected in [(0, 15), (20, 22.5), (60, 37.5), (100, 52.5)]:
+        for raw, expected in [(0, 12), (20, 18), (60, 30), (100, 42)]:
             r = self.rewards()
-            self.assertEqual(r.calculate('test', [damage(power=raw)])[0], expected / 60)
+            self.assertAlmostEqual(r.calculate('test', [damage(power=raw)])[0], expected / 60)
             self.assertEqual(r.calculate('test', [damage(power=raw)])[0], 0)
             self.assertEqual(r.calculate('test', [damage('bomb', raw, 1)])[0], 0)
         before = dict(stage=1, stage_frame=10, lives_raw=2, power_raw=0, replay_mode=0, mode_flags=0)
         after = before | dict(stage_frame=12, bomb={'state': 0}, power_raw=100,
                               combat_reward_events=[damage('first-frame', 20, 1), damage('last-frame', 0, 0)])
-        self.assertEqual(self.rewards().calculate('test', observed_events(before, after))[0], 15 / 60)
+        self.assertEqual(self.rewards().calculate('test', observed_events(before, after))[0], .2)
 
     def test_removed_rewards_and_stage_disappearance_do_not_award(self):
         r = self.rewards()
@@ -78,7 +78,7 @@ class LiveRewardTests(unittest.TestCase):
             r = self.rewards()
             with self.assertRaises(ValueError):
                 r.calculate('test', [damage('good'), damage('bad') | update])
-            self.assertEqual(r.calculate('test', [damage('good')])[0], 15 / 60)
+            self.assertEqual(r.calculate('test', [damage('good')])[0], .2)
 
     def test_progress_unverified_production_is_rejected(self):
         e = dict(id='p', kind='progress', confirmed=True, source='guess',
@@ -131,5 +131,13 @@ class LiveRewardTests(unittest.TestCase):
             r = self.rewards()
             with self.assertRaisesRegex(ValueError, 'bomb state'):
                 r.calculate('test', [damage(), e | dict(bomb_state=state)])
-            self.assertEqual(r.calculate('test', [damage()])[0], 15 / 60)
+            self.assertEqual(r.calculate('test', [damage()])[0], .2)
             self.assertAlmostEqual(r.calculate('test', [e | dict(bomb_state=0)])[0], 80 / 60 + .1 * 5)
+
+class ShotUpdateTests(unittest.TestCase):
+    def test_only_exact_v25_migrates(self):
+        from touhou_ai.live_rewards import WEIGHTS, validate_shot_update
+        old=dict(reward_version='th10-rewards-v25',reward_weights=dict(WEIGHTS,damage=.25))
+        validate_shot_update(old)
+        for change in [dict(reward_version='th10-rewards-v24'),dict(evasion_only=True),dict(reward_weights=WEIGHTS)]:
+            with self.assertRaises(ValueError):validate_shot_update(old|change)

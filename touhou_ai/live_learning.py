@@ -242,7 +242,7 @@ def game_command(action, recovery=False):
     print(result.stdout.strip(), flush=True)
 
 
-def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, continue_managed=False, extended=False, resume_paused=False, continuous=False, dual_grid=False, directml=False, detailed_logs=False, evasion_only=False, transfer_evasion=None, upgrade_progress_power=False, shot_study_games=0, shot_reward_scale=1., add_power_reward=False, upgrade_jitter=False):
+def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, continue_managed=False, extended=False, resume_paused=False, continuous=False, dual_grid=False, directml=False, detailed_logs=False, evasion_only=False, transfer_evasion=None, upgrade_progress_power=False, shot_study_games=0, shot_reward_scale=1., add_power_reward=False, upgrade_jitter=False, update_shot_reward=False):
     from touhou_ai.live_features import EXTENDED_CONTRACT, bomb_events
     from touhou_ai.focused_policy import CONTRACT as FOCUSED_CONTRACT, FocusedFeatures
     from touhou_ai.dual_grid import (CONTRACT as GRID_CONTRACT, SPEC as GRID_SPEC,
@@ -270,6 +270,11 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
     if not 1 <= episodes <= 5 or not 32 <= max_steps <= (18000 if continuous else 2400) or not 30 <= max_seconds <= 900:
         raise ValueError("bounded rehearsal budgets required")
     prior = resume_manifest(resume, extended, dual_grid) if resume is not None else None
+    if update_shot_reward:
+        from touhou_ai.live_rewards import validate_shot_update
+        if not prior or evasion_only or not dual_grid or transfer_evasion or upgrade_progress_power or add_power_reward or upgrade_jitter or shot_study_games:
+            raise ValueError('Shot update requires a full v25 resume')
+        validate_shot_update(prior[0])
     if upgrade_jitter:
         raise ValueError('Vibration reward retired; start a fresh v25 campaign')
     if add_power_reward:
@@ -282,11 +287,11 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
         if not prior or evasion_only or transfer_evasion or not dual_grid:
             raise ValueError('Power upgrade requires a full dual-grid resume')
         validate_power_upgrade(prior[0])
-    if prior and not (upgrade_progress_power or add_power_reward or upgrade_jitter) and prior[0].get('reward_version') != REWARD_VERSION:
+    if prior and not (upgrade_progress_power or add_power_reward or upgrade_jitter or update_shot_reward) and prior[0].get('reward_version') != REWARD_VERSION:
         raise ValueError('old reward checkpoint cannot resume the reset learning campaign')
     if prior and prior[0].get('bullet_scope') != observation_scope:
         raise ValueError('checkpoint bullet observation scope differs')
-    if prior and extended and not (upgrade_progress_power or add_power_reward or upgrade_jitter) and prior[0].get('reward_weights') != REWARD_WEIGHTS:
+    if prior and extended and not (upgrade_progress_power or add_power_reward or upgrade_jitter or update_shot_reward) and prior[0].get('reward_weights') != REWARD_WEIGHTS:
         raise ValueError('reward weights changed; explicit new campaign required')
     if shot_study_games:
         if (not 1 <= shot_study_games <= 5 or shot_reward_scale not in (1., .5)
@@ -392,7 +397,7 @@ def train(output, episodes=3, max_steps=1800, max_seconds=600, resume=None, cont
     if shot_study_games:
         report['shot_reward_study'] = {'games': shot_study_games, 'scale': shot_reward_scale,
             'common_checkpoint': str(resume), 'source_reward_version': prior[0]['reward_version']}
-    if upgrade_progress_power or add_power_reward or upgrade_jitter:
+    if upgrade_progress_power or add_power_reward or upgrade_jitter or update_shot_reward:
         report['reward_transition'] = {'from': prior[0]['reward_version'], 'to': REWARD_VERSION,
             'old_weights': prior[0]['reward_weights'], 'new_weights': REWARD_WEIGHTS,
             'policy_optimizer_rng_preserved': True}
@@ -847,6 +852,7 @@ if __name__ == "__main__":
     parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--max-steps", type=int, default=1800)
     parser.add_argument("--max-seconds", type=int, default=600)
+    parser.add_argument("--update-shot-reward", action="store_true")
     parser.add_argument("--upgrade-jitter", action="store_true")
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--transfer-evasion", type=Path)
@@ -864,7 +870,7 @@ if __name__ == "__main__":
     parser.add_argument("--directml", action="store_true", help="isolated GPU updates with CPU rollback")
     args = parser.parse_args()
     try:
-        train(args.output, args.episodes, args.max_steps, args.max_seconds, args.resume, args.continue_managed, args.extended, args.resume_paused, args.continuous, args.dual_grid, args.directml, args.detailed_logs, args.evasion_only, args.transfer_evasion, args.upgrade_progress_power, args.shot_study_games, args.shot_reward_scale, args.add_power_reward, args.upgrade_jitter)
+        train(args.output, args.episodes, args.max_steps, args.max_seconds, args.resume, args.continue_managed, args.extended, args.resume_paused, args.continuous, args.dual_grid, args.directml, args.detailed_logs, args.evasion_only, args.transfer_evasion, args.upgrade_progress_power, args.shot_study_games, args.shot_reward_scale, args.add_power_reward, args.upgrade_jitter, args.update_shot_reward)
     except BaseException as error:
         status_path = args.output / "status.json"
         if args.output.exists() and not status_path.exists():

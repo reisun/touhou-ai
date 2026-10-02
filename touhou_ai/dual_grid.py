@@ -4,6 +4,7 @@ Pinned TH10 binary geometry is documented in docs/dual-grid-design.md.
 Coverage is a spatial feature, not a promise of exact pixel collision testing.
 """
 import math
+from functools import lru_cache
 import gymnasium as gym
 import numpy as np
 import torch
@@ -60,11 +61,25 @@ def paint_laser(grid, channel, verified_channel, collision, origin, cell):
     angle, length, width = [float(collision[k]) for k in ('angle', 'length', 'width')]
     if not all(math.isfinite(v) for v in (angle, length, width)) or min(length, width) < 0:
         raise ValueError('invalid laser geometry')
+    patch = laser_patch(tuple(pos), angle, length, width, tuple(origin), cell, grid.shape[1:])
+    if patch is None:
+        return
+    sl, coverage = patch
+    grid[channel][sl] = np.maximum(grid[channel][sl], coverage)
+    if collision['field_validated']:
+        grid[verified_channel][sl] = np.maximum(grid[verified_channel][sl], coverage)
+
+
+@lru_cache(maxsize=256)
+def laser_patch(position, angle, length, width, viewport_origin, cell, shape):
+    """Exact-key bounded reuse; no rounding, old-frame geometry, or disk I/O."""
+    pos = np.asarray(position)
+    origin = np.asarray(viewport_origin)
     c, s = math.cos(angle), math.sin(angle)
     direction, normal = np.array([c, s]), np.array([-s, c])
     corners = np.array([pos+direction*t+normal*w for t in (0, length) for w in (-width/2, width/2)])
     lo = np.maximum(np.floor((corners.min(0)-origin)/cell), 0).astype(int)
-    hi = np.minimum(np.ceil((corners.max(0)-origin)/cell), [grid.shape[2], grid.shape[1]]).astype(int)
+    hi = np.minimum(np.ceil((corners.max(0)-origin)/cell), [shape[1], shape[0]]).astype(int)
     x0, y0 = lo; x1, y1 = hi
     if x0 >= x1 or y0 >= y1:
         return
@@ -76,9 +91,8 @@ def paint_laser(grid, channel, verified_channel, collision, origin, cell):
     coverage = (((along >= 0) & (along <= length) & (np.abs(across) <= width/2))
                 .sum(axis=0).astype(np.float32)*.25)
     sl = (slice(y0, y1), slice(x0, x1))
-    grid[channel][sl] = np.maximum(grid[channel][sl], coverage)
-    if collision['field_validated']:
-        grid[verified_channel][sl] = np.maximum(grid[verified_channel][sl], coverage)
+    coverage.flags.writeable = False
+    return sl, coverage
 
 
 def bin_entities(entities, channels, grid, frames=0):

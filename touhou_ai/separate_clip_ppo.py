@@ -1,3 +1,5 @@
+# Portions derived from Stable-Baselines3 2.7.0, Copyright (c) 2019 Antonin Raffin.
+# MIT License; see ../licenses/stable-baselines3-LICENSE.
 """Offline PPO experiment: actor and critic have independent gradient limits.
 
 train is vendored from the installed SB3 PPO, with only its clipping call changed.

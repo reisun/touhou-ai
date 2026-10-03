@@ -1,3 +1,5 @@
+# Portions derived from Stable-Baselines3 2.7.0, Copyright (c) 2019 Antonin Raffin.
+# MIT License; see ../licenses/stable-baselines3-LICENSE.
 """SB3 2.7.0 PPO train with an observable-risk auxiliary loss and selected clipping."""
 import numpy as np
 import torch as th

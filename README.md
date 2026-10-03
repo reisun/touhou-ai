@@ -1,132 +1,76 @@
 # Touhou AI
 
-モデル・報酬・学習運用の変更は[改善履歴](docs/model-learning-history.md)から時系列で参照できます。
-2026-09-26時点では、実機dual-grid観測・報酬v9・CPU推論・DirectML更新まで採用済みです。
-2026-09-27: [報酬v10・ボム12F判断](docs/rewards-v10.md)を実装・限定検証。進行度の実機検出は未完成で無効、学習は停止中です。
-以下のモック／Dockerの説明は初期基盤の記録です。実機学習の採用状況は上記履歴を参照してください。
+東方風神録（Touhou 10）の実機プレイを使った、PPO強化学習の実験プロジェクトです。
+ゲーム内の状態から観測を作り、移動・低速移動・ショット・ボムを学習します。
+実機連携、回避シミュレーター、学習状況を表示するダッシュボードを含みます。
 
-Current setup and verified boundaries: [environment status](docs/environment-status.md).
+研究・開発途中です。クリア性能や、すべてのゲーム環境での動作を保証するものではありません。
 
-Environment foundation for a Windows Touhou 10 bridge and WSL/Docker learner.
-The current backend is a deterministic protocol mock, not Touhou emulation.
-The mock bridge neither reads game memory nor sends keyboard input. A separate
-Windows probe checks read-only game memory access. Real-game learning is not
-enabled; only small, zero-reward diagnostic PPO runs are configured.
+## 主な構成
 
-The [Sharu-inspired learning profile](docs/sharu-learning-profile.md) implements
-the initial numerical observation/action contract, sparse event rewards, and
-an untrained PPO policy. Run `./scripts/learning.ps1 policy-check` for its offline
-diagnostic. This profile is not yet connected to the live game.
+- `touhou_ai/`：観測生成、小型CNN、PPO、報酬、実機連携
+- `scripts/`：起動・停止、検証、実験用スクリプト
+- `dashboard/`：学習状況とOBS向け表示
+- `tests/`：単体テスト・観測や当たり判定の検証
+- `docs/`：設計、実験結果、変更履歴
 
-A [native TH10 diagnostic adapter](docs/live-adapter.md) now supports bounded
-raw-state extraction, game-local input, frame-gated stepping and cold automatic
-restart into Normal/Reimu B. `./scripts/live.ps1 verify -Steps 900 -Episodes 2`
-tests two bounded runs and stops the game. Full PPO observations/rewards are
-still gated pending entity identity, HP/event and geometry validation.
+全体グリッドと自機周辺グリッド、方向別の短期衝突予測を入力します。
+実機操作は基本2F単位です。通常の報酬は射撃ダメージ・進行度・被弾・Power取得を対象とし、
+係数や実験条件は変更されるため、[報酬実装](touhou_ai/live_rewards.py)を参照してください。
 
-## Windows
+## 必要な環境
 
-Use PowerShell 7 and Python 3.11+:
+- Windows、PowerShell 7、Python 3.11以降
+- 正規に入手した東方風神録。実機連携は検証対象の実行ファイルに限定されます
+- Python依存関係：`requirements-learner.txt`、`requirements-windows-live.txt`
+- DirectMLを使う場合は対応するPyTorch環境。Docker / WSLはモック実験向けの任意構成です
+
+## 初期セットアップ
 
 ```powershell
 ./scripts/setup.ps1 -Python C:\path\to\python.exe
-./scripts/bridge.ps1 start
-./scripts/bridge.ps1 smoke
-./scripts/bridge.ps1 status
-./scripts/test.ps1
-./scripts/verify.ps1
-./scripts/bridge.ps1 stop
+./.venv/Scripts/python.exe -m pip install -r requirements-learner.txt -r requirements-windows-live.txt
+Copy-Item game.example.json game.local.json
 ```
 
-Setup creates an isolated `.venv` and a random authentication token in `.env`.
-Logs and the managed process record are in `.runtime`. Both are gitignored.
-The bridge binds only to `127.0.0.1:18765`; no firewall changes are required.
-Only one client may own the mock episode. Smoke testing resets that episode.
+`game.local.json`に自分の実行ファイルのパスなどを設定します。
+実行ファイルの検証を通過する必要があり、ハッシュを書き換えるだけで別バージョンに対応できるわけではありません。
 
-## Docker / WSL
+実機の準備・制約は[Windows probe](docs/windows-probe.md)、
+学習運用は[実機学習](docs/real-learning.md)と[起動スクリプト](scripts/live-learning.ps1)を参照してください。
+過去の文書には当時の実験条件が記載されており、現在の実装と異なる場合があります。
 
-Docker Desktop must use Linux containers with Ubuntu WSL integration enabled.
-Run from the project directory:
-
-```sh
-docker compose run --build --rm test
-docker compose --profile integration run --build --rm smoke
-docker compose --profile learning run --build --rm learner
-```
-
-The integration check needs the Windows bridge running. Containers connect
-through `host.docker.internal`, not container localhost. `.env` supplies the
-token. Compose does not expose any ports or install packages into WSL.
-An authentication token prevents casual local access; this is not a public API.
-
-## Scope
-
-See `docs/architecture.md` for the protocol and remaining real-game work.
-Initial gameplay settings follow the user's Sharu references; unpublished
-coefficients are explicitly provisional. Long live training still needs a budget
-and completion of the real-game integration gates.
-The learner image includes CPU PyTorch, Gymnasium, and Stable-Baselines3 PPO.
-Its default check validates the mock bridge's Gymnasium contract and needs the
-Windows mock bridge running. `verify.ps1` manages that bridge, runs all tests,
-executes a 64-step diagnostic run, and reloads/evaluates its saved model.
-The image digest and resolved dependency versions are pinned. Installation
-follows https://stable-baselines3.readthedocs.io/en/master/guide/install.html.
-GPU acceleration, real-game observations/actions, frame synchronization,
-and automatic episode restart remain separate implementation milestones.
-
-## Experiment Operations
+実行中の学習を確認・停止する例：
 
 ```powershell
-./scripts/bridge.ps1 start
-./scripts/learning.ps1 start
-./scripts/learning.ps1 status
-./scripts/learning.ps1 logs
-./scripts/learning.ps1 evaluate
-./scripts/learning.ps1 report
-./scripts/learning.ps1 stop
-./scripts/bridge.ps1 stop
+./scripts/live-learning.ps1 status
+./scripts/live-learning.ps1 stop
 ```
 
-The default run is a 64-step mock diagnostic, not gameplay training. Wait for
-completion before evaluation. Runs persist under `artifacts/<run-id>` with
-config, versions, model, checkpoints, CSV/text logs, status, and evaluation.
-See [learning operations](docs/learning.md) for stopping and resuming runs.
-See [Windows probe](docs/windows-probe.md) for read-only real-game diagnostics.
+表示サーバーは`./scripts/dashboard.ps1 start`で起動します。
+実験ログ・保存モデルは`artifacts/`、実行時設定は`.runtime/`へ保存されます。
+これらと`.env`、`game.local.json`はGit管理対象外です。
+初期基盤のモックは実機学習とは別で、`bridge.py`とDocker構成に残っています。
 
-## Game process
-
-`game.local.json` contains this machine's executable path and SHA256 and is
-gitignored. On another machine, use `game.example.json` as the configuration
-shape and record the verified executable hash.
+## 検証と記録
 
 ```powershell
-./scripts/game.ps1 inspect
-./scripts/game.ps1 start
-./scripts/game.ps1 status
-./scripts/game.ps1 stop
+./.venv/Scripts/python.exe -m unittest tests.test_live_rewards tests.test_dual_grid
 ```
 
-Start defaults to ordinary Steam `-applaunch 1100140`, without a compatibility
-override. Steam must be signed in. Select windowed mode
-and skip the game's display-mode prompt for unattended startup.
-If Steam is already elevated, start refuses with an explanation: exit Steam
-from its menu first, then use this script. The user has removed Steam's saved
-RUNASADMIN setting. Normal startup and shutdown were verified without
-RunAsInvoker. The optional `-RunAsInvoker` flag remains for diagnostics and
-applies only to the child process environment; it cannot change privileges of
-an already running Steam.
+- [モデル・学習の変更履歴](docs/model-learning-history.md)
+- [グリッド観測の設計](docs/dual-grid-design.md)
+- [実機連携と調査元](docs/live-adapter.md)
 
-Start waits up to 60 seconds for the actual game window and matching executable
-path; use `-StartupTimeoutSeconds 120` for a longer startup. An initial Steam
-login can outlast that timeout; after login inspect status before retrying.
-Status reports `Managed`, `PathReadable`, and `Elevated`. Process paths use
-QueryFullProcessImageName with limited query access, not module enumeration.
-Stop verifies PID, creation time, and executable path, requests a normal window
-close, and checks actual process exit. It never force-kills the game or Steam.
+文書内のローカル実験成果物や保存モデルは公開リポジトリには含まれません。
+実機用ツールはゲームへの入力・状態取得を行います。ダッシュボードや操作用サーバーは
+ローカル利用を想定しており、インターネットへ公開しないでください。
 
-Steam startup, non-elevated game ownership, and normal shutdown were verified
-on this machine. `-LaunchMode Direct` remains available for diagnostics, but
-the Steam route is the tested default. No UAC or permanent compatibility
-settings were changed. See docs/verification.md for the investigation history.
-The Windows virtual environment currently uses the Codex bundled Python as its
-base interpreter; recreate it with setup.ps1 if that runtime moves or is removed.
+## ライセンス
+
+本プロジェクトの独自部分は[MIT License](LICENSE)です。改変・再配布・商用利用が可能で、
+著作権表示とライセンス文の保持が必要です。
+第三者由来部分の表記は[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)を参照してください。
+
+東方Projectおよびゲーム・素材の権利はそれぞれの権利者に帰属します。
+ゲーム本体や素材は配布していません。本プロジェクトは非公式です。
